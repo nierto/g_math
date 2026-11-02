@@ -5,6 +5,25 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-02
+
+### Fixed
+
+- **`schur_decompose` could return a 2×2 block with real eigenvalues.** The
+  decomposition carries H at the compute tier and rounds T to storage once
+  at the end. It decided whether a converged 2×2 block is a complex pair on
+  the compute-tier values; rounding the block to storage moves its
+  discriminant `(a-d)² + 4bc` by about `|a-d| + 2(|b|+|c|)` units, and at a
+  defective (repeated, non-diagonalisable) eigenvalue the discriminant sits
+  at zero, so the returned T could carry a block whose eigenvalues are real,
+  which a real Schur form does not allow. The block is now decided again,
+  exactly, on the values T returns, and split when they read real. Found by
+  the weekly random gate (`[[3, 3, -3], [8, -2, -3], [4, -1, 0]]`,
+  eigenvalues 3, 3, -5, at Q32.32 and Q256.256); present since 0.6.4. Every
+  other result is unchanged. Gate: the matrix is a fixed case of
+  `tests/decomposition_convergence_validation.rs` (it fails without the
+  fix on the same two formats).
+
 ## [0.7.0] - 2026-10-17
 
 ### Upgrading

@@ -1,6 +1,6 @@
 # gMath Roadmap
 
-Current version: **0.7.0** (2026-10-17)
+Current version: **0.7.1** (2026-11-02)
 
 This document tracks planned work and known gaps. Items are grouped by priority, not by timeline. Nothing here is a promise; this is a working list for a solo-maintained project.
 
@@ -553,6 +553,19 @@ byte arrays. The ternary inference kernels are the separate crate
 binaries, about 6700 tests) and compares every public operation with the
 published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
 `docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
+
+### v0.7.1: Schur blocks decided on the returned values
+
+**Release 2026-11-02.** `schur_decompose` decided whether a converged 2×2
+block is a complex pair on its compute-tier values, then rounded T to
+storage; at a defective eigenvalue that rounding could turn the block's
+eigenvalues real, so T was not a real Schur form (since 0.6.4, found by the
+weekly random gate). The block is now decided again on the returned values.
+No other result changes.
+
+Follow-up, measured and not explained: the Schur `dyadic` class of the random
+gate reads eigenvalue errors of 4 to 8 units per unit of scale at Q64.64 and
+wider, against 0 to 1 for every other class.
 
 ---
 

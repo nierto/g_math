@@ -84,8 +84,10 @@ See **[PUBLIC_API.md → Linear algebra](../PUBLIC_API.md#linear-algebra)** and
   nearly repeated eigen- or singular value is only as well determined as the
   gap allows. `schur_decompose` returns a real Schur form: exact zeros below
   the subdiagonal, and 2×2 blocks
-  only for complex pairs. Gate: `tests/decomposition_convergence_validation.rs`,
-  37 fixed cases plus a seeded random corpus from the same failure classes
+  only for complex pairs, decided on the returned values (0.7.0 decided on
+  the compute-tier values, and rounding to storage could make a block at a
+  defective eigenvalue read real). Gate: `tests/decomposition_convergence_validation.rs`,
+  38 fixed cases plus a seeded random corpus from the same failure classes
   (rank-deficient, interior zero diagonals, rectangular, scaled and small
   entries, repeated spectra, signed permutations, hidden complex pairs,
   companion matrices); CI draws a fresh seed weekly.

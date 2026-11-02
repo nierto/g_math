@@ -1,6 +1,6 @@
 [package]
 name = "g_math"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 # integration tests are four group binaries (tests/<group>.rs), not one per file
 autotests = false

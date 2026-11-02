@@ -317,6 +317,10 @@ def fixed_main():
         ("rank6_8x8_consumer_report", square(r8)),
         ("rank3_8x8", square(lr8)),
         ("random_6x6", square(nonsym6)),
+        # fresh seed 41445331313 (full_33): eigenvalue 3 is defective; the 2x2
+        # block kept as a complex pair at the compute tier read as real after
+        # the final narrowing (0.6.4 to 0.7.0)
+        ("defective_3x3", square([[3, 3, -3], [8, -2, -3], [4, -1, 0]])),
     ]
 
     out = [
@@ -337,7 +341,9 @@ def fixed_main():
         out,
         [(name, case, svd_refs(case)) for name, case in svd_cases],
         [(name, case, eigen_refs(case)) for name, case in eigen_cases],
-        [(name, case, schur_refs(case)) for name, case in schur_cases],
+        # a defective eigenvalue is resolved only to about the square root of
+        # the working precision: no spectrum references (as schur_refs_random)
+        [(name, case, schur_refs_random(case) if name == "defective_3x3" else schur_refs(case)) for name, case in schur_cases],
     )
     with open(OUT, "w") as f:
         f.write("\n".join(out))

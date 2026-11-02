@@ -1077,7 +1077,9 @@ pub struct SchurDecomposition<T: FixedNum> {
 ///    deflation break the cycles an ordinary shift can sit in
 /// 3. Deflate when a subdiagonal entry is within `2^-(3F/2)` of its diagonal
 ///    neighbours (relative), floored at `2^-(3F/2)` absolute (set to zero);
-///    split converged 2×2 blocks with real eigenvalues
+///    split converged 2×2 blocks with real eigenvalues; a block kept as a
+///    complex pair is one in the returned T too (its discriminant is checked
+///    again, exactly, on the values rounded to storage)
 ///
 /// **Precision:** H and Q are carried at the compute tier through the
 /// Hessenberg reduction and the whole iteration (Householder factors, rotation
@@ -1382,10 +1384,31 @@ where
     let hs = |r: usize, c: usize| kernels::compute_scale_up::<Fixed<S, F>>(h.get(r, c), k);
     let (a, b) = (hs(i, i), hs(i, i + 1));
     let (c, d) = (hs(i + 1, i), hs(i + 1, i + 1));
-    let p = Fixed::<S, F>::compute_halve(Fixed::<S, F>::compute_checked_add(a, Fixed::<S, F>::compute_negate(d))?);
-    let disc = kernels::exact_sub_dot_compute::<Fixed<S, F>>(Fixed::<S, F>::make_compute_int(0), &[Fixed::<S, F>::compute_negate(p), Fixed::<S, F>::compute_negate(b)], &[p, c])?;
+    let half_gap_and_discriminant = |a: Compute<Fixed<S, F>>, b: Compute<Fixed<S, F>>, c: Compute<Fixed<S, F>>, d: Compute<Fixed<S, F>>| -> Result<_, OverflowDetected> {
+        let p = Fixed::<S, F>::compute_halve(Fixed::<S, F>::compute_checked_add(a, Fixed::<S, F>::compute_negate(d))?);
+        let disc = kernels::exact_sub_dot_compute::<Fixed<S, F>>(Fixed::<S, F>::make_compute_int(0), &[Fixed::<S, F>::compute_negate(p), Fixed::<S, F>::compute_negate(b)], &[p, c])?;
+        Ok((p, disc))
+    };
+    let (mut p, mut disc) = half_gap_and_discriminant(a, b, c, d)?;
+    let mut c = c;
     if Fixed::<S, F>::compute_is_negative(&disc) {
-        return Ok(());
+        // A complex pair at the compute tier must also be one in the returned
+        // T: the block is final, and narrowing moves its discriminant by about
+        // |a-d| + 2(|b|+|c|) ulps, which near a defective eigenvalue (where it
+        // sits at zero) can make it non-negative. Decide again on the stored
+        // values (lifted and scaled exactly, so the sign is exact); if they
+        // read real, split with the rotation of the stored block, whose
+        // residual below the diagonal is within the narrowing's own error.
+        let stored = |r: usize, col: usize| -> Result<Compute<Fixed<S, F>>, OverflowDetected> {
+            let s = Fixed::<S, F>::downscale_to_storage(h.get(r, col))?;
+            Ok(kernels::compute_scale_up::<Fixed<S, F>>(Fixed::<S, F>::upscale_to_compute(s), k))
+        };
+        let (sa, sb, sc, sd) = (stored(i, i)?, stored(i, i + 1)?, stored(i + 1, i)?, stored(i + 1, i + 1)?);
+        let (sp, sdisc) = half_gap_and_discriminant(sa, sb, sc, sd)?;
+        if Fixed::<S, F>::compute_is_negative(&sdisc) {
+            return Ok(());
+        }
+        (p, disc, c) = (sp, sdisc, sc);
     }
     let root = Fixed::<S, F>::sqrt_at_compute_tier(disc);
     let lead = if Fixed::<S, F>::compute_is_negative(&p) {
