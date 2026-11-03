@@ -74,15 +74,21 @@ See **[PUBLIC_API.md → Linear algebra](../PUBLIC_API.md#linear-algebra)** and
   converge or return an error, never a partially converged result:
   `Err(PrecisionLimit)` when the iteration budget runs out, `Err(TierOverflow)`
   when a norm or an entry leaves the range. An off-diagonal entry counts as
-  zero within `2^-(3F/2)` of its diagonal neighbours, never below `2^-(3F/2)`
-  absolute, so exactly rank-deficient matrices converge. Against mpmath on
+  zero within `2^-(3F/2)` of its diagonal neighbours (`2^-17` at least on
+  the 32-bit formats with `F < 16`), never below `2^-(3F/2)` absolute, so
+  exactly rank-deficient matrices converge. Rotation and reflection
+  coefficients carry the compute tier's `2F` fraction bits, or 48 on the
+  32-bit formats with `F < 16`, where `2F` would be coarser than the entries
+  they rotate (before 0.7.1: 129 units at Q22.10 on entries of `2^17`). Against mpmath on
   well-separated spectra, eigenvalues and eigenvectors, singular values and
   vectors, and Schur eigenvalues are within one unit at every format and
   split (0.6.3 converged to `2^-(2F/3)`: up to 1483 units at Q16.16 and past
   `2^30` units at the wide formats). A Schur eigenvalue's error is still the
   deflation bound times the eigenvalue's condition number, and a vector of a
   nearly repeated eigen- or singular value is only as well determined as the
-  gap allows. `schur_decompose` returns a real Schur form: exact zeros below
+  gap allows. On matrices whose entries span many orders of magnitude the
+  compute tier's own `2^-2F` is amplified by that spread: about `kappa 2^-F`
+  units, one unit at Q22.10 on entries `2^10` apart. `schur_decompose` returns a real Schur form: exact zeros below
   the subdiagonal, and 2×2 blocks
   only for complex pairs, decided on the returned values (0.7.0 decided on
   the compute-tier values, and rounding to storage could make a block at a

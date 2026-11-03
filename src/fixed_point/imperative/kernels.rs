@@ -128,6 +128,94 @@ pub(crate) fn narrow_product_to_compute<T: FixedNum>(a: Orient<T>) -> Result<Com
     if round_bit { floor.checked_add_wide(Compute::<T>::one()).ok_or(OverflowDetected::TierOverflow) } else { Ok(floor) }
 }
 
+/// An accumulator value scaled by `2^-shift` and rounded to the compute word,
+/// nearest with ties toward +infinity; checked. With `shift = 2F` this is
+/// [`narrow_product_to_compute`].
+#[inline]
+pub(crate) fn narrow_orient_shifted_to_compute<T: FixedNum>(a: Orient<T>, shift: u32) -> Result<Compute<T>, OverflowDetected> {
+    if shift == 0 {
+        return T::Storage::narrow_orient_to_compute(a).ok_or(OverflowDetected::TierOverflow);
+    }
+    let round_bit = a.bit(shift - 1);
+    let floor = T::Storage::narrow_orient_to_compute(a.shr_bits(shift)).ok_or(OverflowDetected::TierOverflow)?;
+    if round_bit { floor.checked_add_wide(Compute::<T>::one()).ok_or(OverflowDetected::TierOverflow) } else { Ok(floor) }
+}
+
+// ============================================================================
+// Coefficient precision of the rotations and reflections
+// ============================================================================
+
+/// Fractional bits of the rotation coefficients and of the normalised
+/// Householder directions (magnitudes at most one) of the decompositions.
+///
+/// The compute tier's `2F` wherever `2F >= W` (the storage word's width):
+/// a coefficient then carries at least the word's own relative precision,
+/// and these formats return the integers they returned in 0.7.0. On the i32
+/// word with `F < 16` a coefficient at `2F` bits is coarser than the entries
+/// it rotates: an entry of magnitude `x` moves by about `x 2^-2F`, which is
+/// `x 2^-F` units, 129 units at Q22.10 for `x = 2^17` and millions at Q30.2.
+/// There the coefficients carry `2W - 16` bits (48), formed exactly from
+/// integer square roots on the accumulator, so a rotation moves an entry by
+/// well under a unit at every magnitude the format holds.
+#[inline]
+pub(crate) fn coefficient_bits<T: FixedNum>() -> u32 {
+    let (w, two_f) = (<T::Storage as WideInt>::BITS, 2 * T::FRAC_BITS);
+    if two_f >= w { two_f } else { 2 * w - 16 }
+}
+
+/// Whether this format carries its coefficients beyond the compute tier's `2F`.
+#[inline]
+pub(crate) fn wide_coefficients<T: FixedNum>() -> bool {
+    coefficient_bits::<T>() != 2 * T::FRAC_BITS
+}
+
+/// `|x|` of an accumulator value.
+#[inline]
+fn orient_abs<T: FixedNum>(x: Orient<T>) -> Orient<T> {
+    if x.is_negative() { -x } else { x }
+}
+
+/// `round(num / den)` for `den > 0`, nearest with ties toward +infinity.
+fn orient_divide_nearest<T: FixedNum>(num: Orient<T>, den: Orient<T>) -> Orient<T> {
+    let (q, r) = num.divmod(den);
+    let r_abs = orient_abs::<T>(r);
+    let twice = r_abs + r_abs;
+    // divmod truncates toward zero: the remainder carries the sign of num
+    if num.is_negative() {
+        if twice > den { q - Orient::<T>::one() } else { q }
+    } else if twice >= den {
+        q + Orient::<T>::one()
+    } else {
+        q
+    }
+}
+
+/// `values` widened to the accumulator and scaled by a common power of two
+/// until the largest has `target` bits: up exactly, or down (truncating) when
+/// larger. For the ratios formed from them only the direction matters.
+fn orient_scaled_to<T: FixedNum>(values: &[Compute<T>], target: u32) -> Vec<Orient<T>> {
+    let bits = values.iter().map(|v| v.magnitude_bit_length()).max().unwrap_or(0);
+    values
+        .iter()
+        .map(|&v| {
+            let o = T::Storage::widen_compute(v);
+            if bits <= target { o.shl_bits(target - bits) } else { o.shr_bits(bits - target) }
+        })
+        .collect()
+}
+
+/// `2^C` as a compute raw: one at the coefficient precision.
+#[inline]
+fn coefficient_one<T: FixedNum>() -> Compute<T> {
+    compute_quanta::<T>(coefficient_bits::<T>())
+}
+
+/// `round(num 2^C / den)` narrowed to the compute word, for `den > 0`.
+fn coefficient_ratio<T: FixedNum>(num: Orient<T>, den: Orient<T>) -> Result<Compute<T>, OverflowDetected> {
+    let q = orient_divide_nearest::<T>(num.shl_bits(coefficient_bits::<T>()), den);
+    T::Storage::narrow_orient_to_compute(q).ok_or(OverflowDetected::TierOverflow)
+}
+
 // ============================================================================
 // Division of an accumulator by a compute value, one rounding
 // ============================================================================
@@ -207,11 +295,16 @@ pub(crate) fn compute_quanta<T: FixedNum>(shift: u32) -> Compute<T> {
 }
 
 /// Deflation threshold of the iterative decompositions: `2^-(3F/2)` of the
-/// magnitude, at least `2^(F/2)` compute quanta.
+/// magnitude, at least `2^(F/2)` compute quanta. Deflating an entry `e` next
+/// to `d` moves a separated eigen- or singular value by about `e² / d`, at most
+/// `2^(W-1-3F)` units at the top of the range: on the formats with wide
+/// coefficients ([`coefficient_bits`], F < 16 on the i32 word) the relative
+/// shift is at least `(W+3)/2` instead, which keeps that below a quarter unit.
 #[inline]
 pub(crate) fn compute_deflation_threshold<T: FixedNum>(magnitude: Compute<T>) -> Compute<T> {
     let f = T::FRAC_BITS;
-    compute_abs_shr::<T>(magnitude, f * 3 / 2).max(compute_quanta::<T>(f / 2))
+    let shift = if wide_coefficients::<T>() { (f * 3 / 2).max((<T::Storage as WideInt>::BITS + 3) / 2) } else { f * 3 / 2 };
+    compute_abs_shr::<T>(magnitude, shift).max(compute_quanta::<T>(f / 2))
 }
 
 #[inline]
@@ -265,7 +358,8 @@ where
 // Rotations and reflections on compute-tier state
 // ============================================================================
 
-/// A Givens rotation held at the compute tier.
+/// A Givens rotation held at the compute tier, its coefficients at
+/// [`coefficient_bits`] fractional bits.
 #[derive(Clone, Copy)]
 pub(crate) struct Rotation<T: FixedNum> {
     cs: Compute<T>,
@@ -280,6 +374,9 @@ impl<T: FixedNum> Rotation<T> {
 
     /// The rotation that zeroes `b` against `a`, from compute-tier values.
     pub(crate) fn zeroing_compute(a: Compute<T>, b: Compute<T>) -> Result<Self, OverflowDetected> {
+        if wide_coefficients::<T>() {
+            return Self::zeroing_exact(a, b);
+        }
         let one = T::make_compute_int(1);
         let zero = T::make_compute_int(0);
         if T::compute_is_zero(&b) {
@@ -302,32 +399,83 @@ impl<T: FixedNum> Rotation<T> {
         }
     }
 
+    /// [`zeroing_compute`](Self::zeroing_compute) at [`coefficient_bits`]:
+    /// `cs = a / r`, `sn = b / r` with `r = isqrt(a² + b²)` formed exactly on
+    /// the accumulator after an exact scale-up, each quotient rounded once.
+    fn zeroing_exact(a: Compute<T>, b: Compute<T>) -> Result<Self, OverflowDetected> {
+        let (one, zero) = (coefficient_one::<T>(), T::make_compute_int(0));
+        if T::compute_is_zero(&b) {
+            return Ok(Rotation { cs: one, sn: zero });
+        }
+        if T::compute_is_zero(&a) {
+            let sn = if b.is_negative() { T::compute_negate(one) } else { one };
+            return Ok(Rotation { cs: zero, sn });
+        }
+        let w = <T::Storage as WideInt>::BITS;
+        let v = orient_scaled_to::<T>(&[a, b], 2 * w - 2);
+        let r = (v[0] * v[0] + v[1] * v[1]).isqrt();
+        Ok(Rotation { cs: coefficient_ratio::<T>(v[0], r)?, sn: coefficient_ratio::<T>(v[1], r)? })
+    }
+
+    /// The Jacobi rotation of the symmetric 2×2 problem with
+    /// `num = a_pp - a_qq`, `den = 2 a_pq` (`den != 0`), at
+    /// [`coefficient_bits`], with its `t = tan θ` (`|t| <= 1`): with
+    /// `N = |num|`, `D = |den|`, `R = sqrt(N² + D²)` and `M = N + R`,
+    /// `|t| = D / M`, `cs = M / sqrt(M² + D²)`, `|sn| = D / sqrt(M² + D²)`, the
+    /// roots integer square roots on the accumulator after an exact scale-up and
+    /// each quotient rounded once. `t` and `sn` are negative when `num` and
+    /// `den` have opposite signs (`num != 0`).
+    pub(crate) fn jacobi_exact(num: Compute<T>, den: Compute<T>) -> Result<(Self, Compute<T>), OverflowDetected> {
+        let w = <T::Storage as WideInt>::BITS;
+        let negative = !T::compute_is_zero(&num) && (num.is_negative() != den.is_negative());
+        let v = orient_scaled_to::<T>(&[compute_abs::<T>(num), compute_abs::<T>(den)], 2 * w - 3);
+        let (n_abs, d_abs) = (v[0], v[1]);
+        let m = n_abs + (n_abs * n_abs + d_abs * d_abs).isqrt();
+        let q = (m * m + d_abs * d_abs).isqrt();
+        let (t, cs, sn) = (coefficient_ratio::<T>(d_abs, m)?, coefficient_ratio::<T>(m, q)?, coefficient_ratio::<T>(d_abs, q)?);
+        let (t, sn) = if negative { (T::compute_negate(t), T::compute_negate(sn)) } else { (t, sn) };
+        Ok((Rotation { cs, sn }, t))
+    }
+
     /// `(cs x + sn y, -sn x + cs y)`, each formed exactly and rounded once.
     pub(crate) fn apply_compute(&self, x: Compute<T>, y: Compute<T>) -> Result<(Compute<T>, Compute<T>), OverflowDetected> {
         let first = T::Storage::widen_product(self.cs, x).add_exact(T::Storage::widen_product(self.sn, y))?;
         let second = T::Storage::widen_product(T::compute_negate(self.sn), x).add_exact(T::Storage::widen_product(self.cs, y))?;
-        Ok((narrow_product_to_compute::<T>(first)?, narrow_product_to_compute::<T>(second)?))
+        Ok((narrow_coefficient_product::<T>(first)?, narrow_coefficient_product::<T>(second)?))
     }
 
     /// `cs x + sn y`, formed exactly and rounded once.
     pub(crate) fn combine_compute(&self, x: Compute<T>, y: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
-        narrow_product_to_compute::<T>(T::Storage::widen_product(self.cs, x).add_exact(T::Storage::widen_product(self.sn, y))?)
+        narrow_coefficient_product::<T>(T::Storage::widen_product(self.cs, x).add_exact(T::Storage::widen_product(self.sn, y))?)
     }
 
     #[inline]
     pub(crate) fn cos_times_compute(&self, x: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
-        compute_product::<T>(self.cs, x)
+        coefficient_product::<T>(self.cs, x)
     }
 
     #[inline]
     pub(crate) fn sin_times_compute(&self, x: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
-        compute_product::<T>(self.sn, x)
+        coefficient_product::<T>(self.sn, x)
     }
 
     #[inline]
     pub(crate) fn neg_sin_times_compute(&self, x: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
-        compute_product::<T>(T::compute_negate(self.sn), x)
+        coefficient_product::<T>(T::compute_negate(self.sn), x)
     }
+}
+
+/// An exact product with one factor at [`coefficient_bits`] rounded once to
+/// the compute tier (with `2F` coefficient bits: [`narrow_product_to_compute`]).
+#[inline]
+fn narrow_coefficient_product<T: FixedNum>(a: Orient<T>) -> Result<Compute<T>, OverflowDetected> {
+    narrow_orient_shifted_to_compute::<T>(a, coefficient_bits::<T>())
+}
+
+/// `coefficient * x` rounded once to the compute tier.
+#[inline]
+pub(crate) fn coefficient_product<T: FixedNum>(coefficient: Compute<T>, x: Compute<T>) -> Result<Compute<T>, OverflowDetected> {
+    narrow_coefficient_product::<T>(T::Storage::widen_product(coefficient, x))
 }
 
 /// The Householder vector of `x` at the compute tier, with `v . v`, after a
@@ -340,6 +488,9 @@ pub(crate) fn householder_vector_compute<T: FixedNum>(
     let bits = x.iter().map(|&xi| compute_bit_length::<T>(xi)).max().unwrap_or(0);
     if bits == 0 {
         return Ok(None);
+    }
+    if wide_coefficients::<T>() {
+        return householder_vector_exact::<T>(x, bits);
     }
     let unit_bits = 2 * T::FRAC_BITS;
     let scaled: Vec<Compute<T>>;
@@ -367,12 +518,44 @@ pub(crate) fn householder_vector_compute<T: FixedNum>(
     Ok(Some((v, vv)))
 }
 
+/// [`householder_vector_compute`] at [`coefficient_bits`]: `x` normalised to
+/// `C` bits (scaled up exactly, or down when larger), `|x|` the nearest
+/// integer square root of the exact `x . x` (no rounded intermediate), and
+/// `v . v` rounded once by `2^C`, the scale [`reflect_compute`] divides by.
+fn householder_vector_exact<T: FixedNum>(x: &[Compute<T>], bits: u32) -> Result<Option<(Vec<Compute<T>>, Compute<T>)>, OverflowDetected> {
+    let unit_bits = coefficient_bits::<T>();
+    let x: Vec<Compute<T>> = if bits < unit_bits {
+        x.iter().map(|&xi| xi.shl_bits(unit_bits - bits)).collect()
+    } else if bits > unit_bits {
+        x.iter().map(|&xi| xi.shr_bits(bits - unit_bits)).collect()
+    } else {
+        x.to_vec()
+    };
+    let xx = exact_dot_compute::<T>(&x, &x)?;
+    if xx == Orient::<T>::zero() {
+        return Ok(None);
+    }
+    let root = xx.isqrt();
+    // nearest: (root + 1/2)² = root² + root + 1/4 < xx exactly when xx - root² > root
+    let root = if xx - root * root > root { root + Orient::<T>::one() } else { root };
+    let norm = T::Storage::narrow_orient_to_compute(root).ok_or(OverflowDetected::TierOverflow)?;
+    let alpha = if x[0].is_negative() { norm } else { T::compute_negate(norm) };
+    let mut v = x;
+    v[0] = T::compute_checked_add(v[0], T::compute_negate(alpha))?;
+    let vv = narrow_coefficient_product::<T>(exact_dot_compute::<T>(&v, &v)?)?;
+    if T::compute_is_zero(&vv) {
+        return Ok(None);
+    }
+    Ok(Some((v, vv)))
+}
+
 /// `w -= 2 (v . w) / (v . v) v` at the compute tier: the dot exact, each
-/// update one exact quotient rounded once.
+/// update one exact quotient rounded once. `v . v` is scaled by `2^C`
+/// ([`coefficient_bits`]), as [`householder_vector_compute`] returns it.
 pub(crate) fn reflect_compute<T: FixedNum>(
     w: &mut [Compute<T>], v: &[Compute<T>], v_dot_v: Compute<T>,
 ) -> Result<(), OverflowDetected> {
-    let vw = narrow_product_to_compute::<T>(exact_dot_compute::<T>(v, w)?)?;
+    let vw = narrow_coefficient_product::<T>(exact_dot_compute::<T>(v, w)?)?;
     if T::compute_is_zero(&vw) {
         return Ok(());
     }

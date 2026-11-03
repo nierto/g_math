@@ -603,7 +603,6 @@ fn jacobi_rotate<S: Storage, const F: u32>(s: &mut ComputeMatrix<Fixed<S, F>>, v
 where
     Fixed<S, F>: FixedNum<Storage = S>,
 {
-    let n = s.rows();
     let (a_pp, a_qq, a_pq) = (s.get(p, p), s.get(q, q), s.get(p, q));
     if Fixed::<S, F>::compute_is_zero(&a_pq) {
         return Ok(());
@@ -611,6 +610,12 @@ where
     let one = Fixed::<S, F>::make_compute_int(1);
     let num = Fixed::<S, F>::compute_checked_add(a_pp, Fixed::<S, F>::compute_negate(a_qq))?;
     let den = Fixed::<S, F>::compute_checked_add(a_pq, a_pq)?;
+    if kernels::wide_coefficients::<Fixed<S, F>>() {
+        // coefficients beyond 2F bits (the i32 word with F < 16)
+        let (rot, t) = Rotation::<Fixed<S, F>>::jacobi_exact(num, den)?;
+        let shift = kernels::coefficient_product::<Fixed<S, F>>(t, a_pq)?;
+        return jacobi_apply(s, v, p, q, &rot, shift);
+    }
     let negative = !Fixed::<S, F>::compute_is_zero(&num) && (Fixed::<S, F>::compute_is_negative(&num) != Fixed::<S, F>::compute_is_negative(&den));
     let (num_abs, den_abs) = (kernels::compute_abs::<Fixed<S, F>>(num), kernels::compute_abs::<Fixed<S, F>>(den));
     let t_abs = if num_abs <= den_abs {
@@ -627,7 +632,21 @@ where
     let t = if negative { Fixed::<S, F>::compute_negate(t_abs) } else { t_abs };
     let cs = Fixed::<S, F>::compute_divide(one, Fixed::<S, F>::sqrt_at_compute_tier(Fixed::<S, F>::compute_add(one, Fixed::<S, F>::compute_multiply(t, t))))?;
     let rot = Rotation::<Fixed<S, F>>::from_parts(cs, Fixed::<S, F>::compute_multiply(t, cs));
+    let shift = kernels::compute_product::<Fixed<S, F>>(t, a_pq)?;
+    jacobi_apply(s, v, p, q, &rot, shift)
+}
 
+/// Apply a Jacobi rotation at (p, q): rotate the other rows and columns and
+/// the accumulated vectors, move the diagonal by `shift = t a_pq`, zero the pair.
+fn jacobi_apply<S: Storage, const F: u32>(
+    s: &mut ComputeMatrix<Fixed<S, F>>, v: &mut ComputeMatrix<Fixed<S, F>>, p: usize, q: usize, rot: &Rotation<Fixed<S, F>>,
+    shift: Compute<Fixed<S, F>>,
+) -> Result<(), OverflowDetected>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let n = s.rows();
+    let (a_pp, a_qq) = (s.get(p, p), s.get(q, q));
     for r in 0..n {
         if r == p || r == q {
             continue;
@@ -639,7 +658,6 @@ where
         s.set(q, r, new_rq);
     }
 
-    let shift = kernels::compute_product::<Fixed<S, F>>(t, a_pq)?;
     s.set(p, p, Fixed::<S, F>::compute_checked_add(a_pp, shift)?);
     s.set(q, q, Fixed::<S, F>::compute_checked_add(a_qq, Fixed::<S, F>::compute_negate(shift))?);
     s.set(p, q, Fixed::<S, F>::make_compute_int(0));

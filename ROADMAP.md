@@ -554,18 +554,29 @@ binaries, about 6700 tests) and compares every public operation with the
 published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
 `docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
 
-### v0.7.1: Schur blocks decided on the returned values
+### v0.7.1: Schur blocks decided on the returned values; wide coefficients
 
 **Release 2026-11-02.** `schur_decompose` decided whether a converged 2×2
 block is a complex pair on its compute-tier values, then rounded T to
 storage; at a defective eigenvalue that rounding could turn the block's
 eigenvalues real, so T was not a real Schur form (since 0.6.4, found by the
 weekly random gate). The block is now decided again on the returned values.
-No other result changes.
+On the 32-bit formats with `F < 16` the rotation and reflection
+coefficients were held at `2F` bits, coarser than the entries they rotate
+(Q22.10: 129 units at `2^17`, Q30.2: millions); they carry 48 bits there now
+and the deflation bound is at least `2^-17` relative, so large entries
+decompose with 0 units at every split. The Schur "dyadic" readings of 4 to 8
+units were the gate's own reading of a block (two rounded products), exact
+now. The random-gate bounds are recalibrated to today's measurements.
 
-Follow-up, measured and not explained: the Schur `dyadic` class of the random
-gate reads eigenvalue errors of 4 to 8 units per unit of scale at Q64.64 and
-wider, against 0 to 1 for every other class.
+Follow-up, measured and not done: on those formats the compute tier itself
+keeps `2F` fraction bits, and on a matrix whose entries span many orders of
+magnitude its error is amplified by the spread (about `kappa 2^-F` units, one
+unit at Q22.10 on entries `2^10` apart, in 0.6.7 as well). Carrying the
+compute-tier state with more fraction bits on those formats would remove it.
+The decomposition suites do not run at the edge splits (2 to 6, 26 to 30):
+their fixed and random matrices have entries the narrowest of those formats
+cannot hold.
 
 ---
 

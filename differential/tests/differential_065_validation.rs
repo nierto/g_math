@@ -348,6 +348,68 @@ impl Tally {
         self.corrected += 1;
         self.values += 1;
     }
+    /// As `check`, where a difference passes only when every new storage raw is
+    /// no farther from its exact value (`Mpf` at 1088 bits, `Err` components
+    /// skipped) than the 0.6.7 one or within `NEAR_UNITS` of it, and counts
+    /// as corrected.
+    fn check_closer_raws(&mut self, old: Outcome<Vec<Raw>>, new: Outcome<Vec<Raw>>, exact: impl FnOnce() -> Vec<ExactValue>, input: &dyn std::fmt::Debug) {
+        if old == new { return self.check(old, new, input); }
+        let (Outcome::Value(o), Outcome::Value(n)) = (&old, &new) else {
+            panic!("{} differs from 0.6.7 on input {:?} in kind: old {:?}, new {:?}", self.name, input, old, new);
+        };
+        let ev = exact();
+        assert!(o.len() == ev.len() && n.len() == ev.len(), "{}: component counts", self.name);
+        for ((ow, nw), e) in o.iter().zip(n).zip(&ev) {
+            let e = match e { Ok(e) => *e, Err(_) => continue };
+            let dist = |w: Raw| Mpf::<C17>::from_raw(w, FRAC).sub(e).abs();
+            let near = Mpf::<C17>::from_raw(<Raw as WideInt>::from_i128(NEAR_UNITS as i128), FRAC);
+            // no farther than 0.6.7, or within NEAR_UNITS of the exact value: both
+            // crates keep the factors at the compute tier's 2F bits, whose error the
+            // spread of a matrix's entries amplifies (about kappa 2^-F units, one at
+            // Q22.10 on entries 2^10 apart), so on such inputs either may be closer
+            let worse = dist(*ow).sub(dist(*nw)).is_negative() && near.sub(dist(*nw)).is_negative();
+            assert!(!worse, "{} differs from 0.6.7 on input {:?} and is farther from the exact value by more than {} units: old {:?} (off {:?}), new {:?} (off {:?})", self.name, input, NEAR_UNITS, ow, dist(*ow), nw, dist(*nw));
+            self.worst = self.worst.max(ow.units(nw));
+        }
+        self.cases += 1;
+        self.corrected += 1;
+        self.values += 1;
+    }
+    /// As `check_closer_raws` for outputs whose error is the condition number
+    /// times the noise of their factors (a solve): each differing component's
+    /// distance to the exact value is recorded for both crates (in sixteenths
+    /// of a unit) and judged in aggregate by `assert_closer_in_aggregate`, since
+    /// on an ill-conditioned system either crate may land closer.
+    fn record_closer_raws(&mut self, log: &mut Vec<(i128, i128)>, old: Outcome<Vec<Raw>>, new: Outcome<Vec<Raw>>, exact: impl FnOnce() -> Vec<ExactValue>, input: &dyn std::fmt::Debug) {
+        if old == new { return self.check(old, new, input); }
+        let (Outcome::Value(o), Outcome::Value(n)) = (&old, &new) else {
+            panic!("{} differs from 0.6.7 on input {:?} in kind: old {:?}, new {:?}", self.name, input, old, new);
+        };
+        let ev = exact();
+        for ((ow, nw), e) in o.iter().zip(n).zip(&ev) {
+            let e = match e { Ok(e) => *e, Err(_) => continue };
+            if ow == nw { continue; }
+            // distances in sixteenths of a unit, as integers
+            let sixteenths = |w: Raw| {
+                let d = Mpf::<C17>::from_raw(w, FRAC).sub(e).abs();
+                d.round_to_raw::<i128>(FRAC + 4, true).or_else(|_| d.round_to_raw::<i128>(FRAC + 6, true).map(|x| x / 4)).unwrap_or(i128::MAX)
+            };
+            log.push((sixteenths(*ow), sixteenths(*nw)));
+        }
+        self.cases += 1;
+        self.corrected += 1;
+        self.values += 1;
+    }
+    /// As `check`, where the new crate may differ from 0.6.7 only in a form
+    /// that `close` accepts as equivalent (both must be values).
+    fn check_equivalent<T: PartialEq + std::fmt::Debug>(&mut self, old: Outcome<T>, new: Outcome<T>, close: impl FnOnce(&T, &T) -> bool, input: &dyn std::fmt::Debug) {
+        if old == new { return self.check(old, new, input); }
+        let ok = match (&old, &new) { (Outcome::Value(o), Outcome::Value(n)) => close(o, n), _ => false };
+        assert!(ok, "{} differs from 0.6.7 on input {:?} beyond the accepted equivalence: old {:?}, new {:?}", self.name, input, old, new);
+        self.cases += 1;
+        self.corrected += 1;
+        self.values += 1;
+    }
     /// As `report`, for inputs chosen inside the function's domain: a gate
     /// that only ever compared errors or panics would prove nothing.
     fn report_in_domain(&self) {
@@ -694,6 +756,103 @@ fn new_mat(r: usize, c: usize, raws: &[Raw]) -> NewMatrix { NewMatrix::from_slic
 fn old_mraws(m: &OldMatrix) -> Vec<Raw> { (0..m.rows()).flat_map(|i| (0..m.cols()).map(move |j| (i, j))).map(|(i, j)| raw::old_raw(m.get(i, j))).collect() }
 fn new_mraws(m: &NewMatrix) -> Vec<Raw> { (0..m.rows()).flat_map(|i| (0..m.cols()).map(move |j| (i, j))).map(|(i, j)| raw::new_raw(m.get(i, j))).collect() }
 
+/// A raw of a word that fits i128 (the i32 word of the wide-coefficient builds).
+fn raw_i128(r: Raw) -> i128 {
+    let neg = r.is_negative();
+    let m = if neg { -r } else { r };
+    let v = (0..m.bit_length()).fold(0i128, |acc, k| if m.bit(k) { acc | (1i128 << k) } else { acc });
+    if neg { -v } else { v }
+}
+
+/// The exact Householder QR of a `d x d` matrix with the crate's convention
+/// (a reflection for every column, `alpha = -sign(x0) |x|`, skipped for a zero
+/// column), in `Mpf`: Q, R row-major and the solution of `A x = b` via
+/// `R^-1 Q^T b`, concatenated as the crate's outputs are.
+fn qr_exact(a: &[Raw], d: usize, b: &[Raw]) -> Vec<ExactValue> {
+    let mf = |r: Raw| Mpf::<C17>::from_raw(r, FRAC);
+    let zero = Mpf::<C17>::from_int(0);
+    let mut r: Vec<Vec<Mpf<C17>>> = (0..d).map(|i| (0..d).map(|j| mf(a[i * d + j])).collect()).collect();
+    let mut q: Vec<Vec<Mpf<C17>>> = (0..d).map(|i| (0..d).map(|j| Mpf::<C17>::from_int((i == j) as i128)).collect()).collect();
+    let dot = |x: &[Mpf<C17>], y: &[Mpf<C17>]| x.iter().zip(y).fold(zero, |acc, (u, v)| acc.add(u.mul(*v)));
+    for k in 0..d {
+        let x: Vec<Mpf<C17>> = (k..d).map(|i| r[i][k]).collect();
+        let xx = dot(&x, &x);
+        if xx.is_zero() { continue; }
+        let Ok(norm) = xx.sqrt() else { return vec![Err(MpfErr::Domain); 2 * d * d + d] };
+        let alpha = if x[0].is_negative() { norm } else { norm.neg() };
+        let mut v = x.clone();
+        v[0] = v[0].sub(alpha);
+        let vv = dot(&v, &v);
+        if vv.is_zero() { continue; }
+        let reflect = |w: &mut Vec<Mpf<C17>>| -> Result<(), MpfErr> {
+            let f = dot(&v, w).mul_int(2).div(vv)?;
+            for (wi, vi) in w.iter_mut().zip(&v) { *wi = wi.sub(f.mul(*vi)); }
+            Ok(())
+        };
+        for j in k..d {
+            let mut col: Vec<Mpf<C17>> = (k..d).map(|i| r[i][j]).collect();
+            if reflect(&mut col).is_err() { return vec![Err(MpfErr::Domain); 2 * d * d + d]; }
+            for (i, c) in (k..d).zip(col) { r[i][j] = c; }
+        }
+        for i in (k + 1)..d { r[i][k] = zero; }
+        for i in 0..d {
+            let mut row: Vec<Mpf<C17>> = (k..d).map(|j| q[i][j]).collect();
+            if reflect(&mut row).is_err() { return vec![Err(MpfErr::Domain); 2 * d * d + d]; }
+            for (j, c) in (k..d).zip(row) { q[i][j] = c; }
+        }
+    }
+    let y: Vec<Mpf<C17>> = (0..d).map(|i| (0..d).fold(zero, |acc, k| acc.add(q[k][i].mul(mf(b[k]))))).collect();
+    let mut x: Vec<ExactValue> = vec![Err(MpfErr::Domain); d];
+    for i in (0..d).rev() {
+        let mut acc = y[i];
+        let mut ok = true;
+        for j in (i + 1)..d {
+            match x[j] { Ok(xj) => acc = acc.sub(r[i][j].mul(xj)), Err(_) => ok = false }
+        }
+        x[i] = if ok { acc.div(r[i][i]) } else { Err(MpfErr::Domain) };
+    }
+    q.iter().flatten().map(|v| Ok(*v)).chain(r.iter().flatten().map(|v| Ok(*v))).chain(x).collect()
+}
+
+/// Values sorted, to compare spectra independent of their order.
+fn sorted(mut v: Vec<Raw>) -> Vec<Raw> { v.sort(); v }
+
+/// Whether two real Schur forms (row-major raws) carry the same spectrum: a
+/// real Schur form is unique only up to the order of its blocks along the
+/// diagonal and the rotation of each 2×2 block. The 1×1 blocks, sorted, agree
+/// within `NEAR_UNITS`; the 2×2 blocks, sorted by trace, agree in trace within
+/// `NEAR_UNITS` and in determinant within what moves of `NEAR_UNITS` per entry
+/// allow.
+fn same_schur_form(old: &[Raw], new: &[Raw]) -> bool {
+    let Some(n) = (0..=old.len()).find(|k| k * k == old.len()) else { return false };
+    if new.len() != old.len() { return false; }
+    let near = NEAR_UNITS as i128;
+    // (1x1 values, 2x2 blocks as (trace, det, entry magnitude))
+    let blocks = |t: &[Raw]| {
+        let at = |i: usize, j: usize| raw_i128(t[i * n + j]);
+        let (mut singles, mut pairs) = (Vec::new(), Vec::new());
+        let mut i = 0;
+        while i < n {
+            if i + 1 < n && at(i + 1, i) != 0 {
+                let (a, b, c, d) = (at(i, i), at(i, i + 1), at(i + 1, i), at(i + 1, i + 1));
+                pairs.push((a + d, a * d - b * c, a.abs() + b.abs() + c.abs() + d.abs()));
+                i += 2;
+            } else {
+                singles.push(at(i, i));
+                i += 1;
+            }
+        }
+        singles.sort();
+        pairs.sort();
+        (singles, pairs)
+    };
+    let ((os, op), (ns, np)) = (blocks(old), blocks(new));
+    os.len() == ns.len()
+        && op.len() == np.len()
+        && os.iter().zip(&ns).all(|(a, b)| (a - b).abs() <= near)
+        && op.iter().zip(&np).all(|(a, b)| (a.0 - b.0).abs() <= near && (a.1 - b.1).abs() <= near * a.2.max(b.2) + near * near)
+}
+
 #[test]
 fn vectors_and_matrices_are_bit_identical_to_0_6_5() {
     silence_panics();
@@ -783,6 +942,15 @@ fn decompositions_are_bit_identical_to_0_6_5() {
     let mut svd = Tally::new("svd/pseudoinverse/rank");
     let mut schur = Tally::new("schur");
     let mut norms = Tally::new("norms/condition");
+    // 0.7.1: on the i32 word with F < 16 the rotation and reflection
+    // coefficients carry 48 bits instead of 2F (they were coarser than the
+    // entries they rotate: 129 units at Q22.10 on entries of 2^17), so the
+    // decompositions built on them may move here, by at most NEAR_UNITS on
+    // these entries; their accuracy is gated against mpmath in the main suite.
+    // Every other build, and LU and Cholesky everywhere, stay bit-identical.
+    let wide_coefficients = WIDTH == 32 && 2 * FRAC < 32;
+    let mut solve_log: Vec<(i128, i128)> = Vec::new();
+
     for i in 0..n {
         // 1 x 1 to 5 x 5, entries a few units in magnitude; every ninth at
         // the storage range (overflow and refusal paths)
@@ -805,11 +973,27 @@ fn decompositions_are_bit_identical_to_0_6_5() {
             fallible(|| -> Result<_, g_math::fixed_point::OverflowDetected> { Ok((new_raws(&nv::solve(&nm, &nb)?), raw::new_raw(nv::determinant(&nm)?), new_mraws(&nv::inverse(&nm)?))) }),
             &m,
         );
-        qr.check(
-            fallible(|| od::qr_decompose(&om).and_then(|f| Ok((old_mraws(&f.q), old_mraws(&f.r), old_raws(&f.solve(&ob)?))))),
-            fallible(|| nd::qr_decompose(&nm).and_then(|f| Ok((new_mraws(&f.q), new_mraws(&f.r), new_raws(&f.solve(&nb)?))))),
-            &m,
-        );
+        if wide_coefficients {
+            // the factors and the solve against the exact QR and the exact solution
+            qr.check_closer_raws(
+                fallible(|| od::qr_decompose(&om).map(|f| [old_mraws(&f.q), old_mraws(&f.r)].concat())),
+                fallible(|| nd::qr_decompose(&nm).map(|f| [new_mraws(&f.q), new_mraws(&f.r)].concat())),
+                || qr_exact(&m, d, &b)[..2 * d * d].to_vec(),
+                &m,
+            );
+            qr.record_closer_raws(&mut solve_log,
+                fallible(|| od::qr_decompose(&om).and_then(|f| f.solve(&ob)).map(|x| old_raws(&x))),
+                fallible(|| nd::qr_decompose(&nm).and_then(|f| f.solve(&nb)).map(|x| new_raws(&x))),
+                || qr_exact(&m, d, &b)[2 * d * d..].to_vec(),
+                &(&m, &b),
+            );
+        } else {
+            qr.check(
+                fallible(|| od::qr_decompose(&om).and_then(|f| Ok((old_mraws(&f.q), old_mraws(&f.r), old_raws(&f.solve(&ob)?))))),
+                fallible(|| nd::qr_decompose(&nm).and_then(|f| Ok((new_mraws(&f.q), new_mraws(&f.r), new_raws(&f.solve(&nb)?))))),
+                &m,
+            );
+        }
         chol.check(
             fallible(|| od::cholesky_decompose(&os).and_then(|f| Ok((old_mraws(&f.l), old_raws(&f.solve(&ob)?))))),
             fallible(|| nd::cholesky_decompose(&ns).and_then(|f| Ok((new_mraws(&f.l), new_raws(&f.solve(&nb)?))))),
@@ -828,26 +1012,49 @@ fn decompositions_are_bit_identical_to_0_6_5() {
         }
         if bits < WIDTH - 1 {
             // the iterative ones on in-range entries only (debug builds are slow at the range)
-            eig.check(
-                fallible(|| od::eigen_symmetric(&os).map(|e| (old_raws(&e.values), old_mraws(&e.vectors)))),
-                fallible(|| nd::eigen_symmetric(&ns).map(|e| (new_raws(&e.values), new_mraws(&e.vectors)))),
-                &m,
-            );
-            svd.check(
-                fallible(|| od::svd_decompose(&om).map(|s| (old_mraws(&s.u), old_raws(&s.sigma), old_mraws(&s.vt)))),
-                fallible(|| nd::svd_decompose(&nm).map(|s| (new_mraws(&s.u), new_raws(&s.sigma), new_mraws(&s.vt)))),
-                &m,
-            );
-            svd.check(
-                fallible(|| -> Result<_, g_math_065::fixed_point::OverflowDetected> { Ok((old_mraws(&ov::pseudoinverse(&om)?), ov::rank(&om)?, raw::old_raw(ov::condition_number_2(&om)?))) }),
-                fallible(|| -> Result<_, g_math::fixed_point::OverflowDetected> { Ok((new_mraws(&nv::pseudoinverse(&nm)?), nv::rank(&nm)?, raw::new_raw(nv::condition_number_2(&nm)?))) }),
-                &m,
-            );
-            schur.check(
-                fallible(|| od::schur_decompose(&om).map(|s| (old_mraws(&s.q), old_mraws(&s.t)))),
-                fallible(|| nd::schur_decompose(&nm).map(|s| (new_mraws(&s.q), new_mraws(&s.t)))),
-                &m,
-            );
+            if wide_coefficients {
+                // eigen- and singular vectors are determined only up to sign (and
+                // within repeated values), a real Schur form up to the rotation of
+                // each 2x2 block: compare what is unique
+                eig.check_near(
+                    fallible(|| od::eigen_symmetric(&os).map(|e| sorted(old_raws(&e.values)))),
+                    fallible(|| nd::eigen_symmetric(&ns).map(|e| sorted(new_raws(&e.values)))),
+                    &m,
+                );
+                svd.check_near(
+                    fallible(|| od::svd_decompose(&om).map(|s| old_raws(&s.sigma))),
+                    fallible(|| nd::svd_decompose(&nm).map(|s| new_raws(&s.sigma))),
+                    &m,
+                );
+                svd.check(fallible(|| ov::rank(&om)), fallible(|| nv::rank(&nm)), &m);
+                schur.check_equivalent(
+                    fallible(|| od::schur_decompose(&om).map(|s| old_mraws(&s.t))),
+                    fallible(|| nd::schur_decompose(&nm).map(|s| new_mraws(&s.t))),
+                    |o, n| same_schur_form(o, n),
+                    &m,
+                );
+            } else {
+                eig.check(
+                    fallible(|| od::eigen_symmetric(&os).map(|e| (old_raws(&e.values), old_mraws(&e.vectors)))),
+                    fallible(|| nd::eigen_symmetric(&ns).map(|e| (new_raws(&e.values), new_mraws(&e.vectors)))),
+                    &m,
+                );
+                svd.check(
+                    fallible(|| od::svd_decompose(&om).map(|s| (old_mraws(&s.u), old_raws(&s.sigma), old_mraws(&s.vt)))),
+                    fallible(|| nd::svd_decompose(&nm).map(|s| (new_mraws(&s.u), new_raws(&s.sigma), new_mraws(&s.vt)))),
+                    &m,
+                );
+                svd.check(
+                    fallible(|| -> Result<_, g_math_065::fixed_point::OverflowDetected> { Ok((old_mraws(&ov::pseudoinverse(&om)?), ov::rank(&om)?, raw::old_raw(ov::condition_number_2(&om)?))) }),
+                    fallible(|| -> Result<_, g_math::fixed_point::OverflowDetected> { Ok((new_mraws(&nv::pseudoinverse(&nm)?), nv::rank(&nm)?, raw::new_raw(nv::condition_number_2(&nm)?))) }),
+                    &m,
+                );
+                schur.check(
+                    fallible(|| od::schur_decompose(&om).map(|s| (old_mraws(&s.q), old_mraws(&s.t)))),
+                    fallible(|| nd::schur_decompose(&nm).map(|s| (new_mraws(&s.q), new_mraws(&s.t)))),
+                    &m,
+                );
+            }
         }
         norms.check(
             fallible(|| -> Result<_, g_math_065::fixed_point::OverflowDetected> { Ok((raw::old_raw(ov::frobenius_norm(&om)), raw::old_raw(ov::norm_1(&om)), raw::old_raw(ov::norm_inf(&om)), raw::old_raw(ov::condition_number_1(&om)?))) }),
@@ -857,6 +1064,17 @@ fn decompositions_are_bit_identical_to_0_6_5() {
     }
     for t in [&lu, &qr, &chol, &eig, &svd, &schur, &norms] {
         t.report();
+    }
+    if !solve_log.is_empty() {
+        let better = solve_log.iter().filter(|(o, n)| n < o).count();
+        let worse = solve_log.iter().filter(|(o, n)| n > o).count();
+        let (so, sn): (i128, i128) = solve_log.iter().fold((0, 0), |(a, b), (o, n)| (a.saturating_add(*o), b.saturating_add(*n)));
+        let mut by_excess = solve_log.clone();
+        by_excess.sort_by_key(|(o, n)| o - n);
+        println!("qr solve (wide coefficients): {} components moved, closer {better}, farther {worse}; total distance to exact 0.6.7 {so}/16, new {sn}/16 units", solve_log.len());
+        println!("  most farther (0.6.7, new in 1/16 units): {:?}", &by_excess[..by_excess.len().min(8)]);
+        println!("  most closer: {:?}", &by_excess[by_excess.len().saturating_sub(8)..]);
+        assert!(better >= worse && sn <= so, "qr solve: the new crate is not closer to the exact solutions in aggregate");
     }
 }
 

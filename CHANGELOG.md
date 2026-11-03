@@ -23,6 +23,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other result is unchanged. Gate: the matrix is a fixed case of
   `tests/decomposition_convergence_validation.rs` (it fails without the
   fix on the same two formats).
+- **The decompositions lost accuracy on large entries of the 32-bit
+  formats with fewer than 16 fraction bits.** Rotation and reflection
+  coefficients (magnitudes at most one) were held at the compute tier's
+  `2F` fraction bits; an entry of magnitude `x` moved by about `x 2^-2F`,
+  which is `x 2^-F` units once `x` exceeds `2^F`. On `x (J - I)` with `x`
+  an eighth of half the range: 72 to 129 units at Q22.10, up to 3009 at
+  Q24.8, 17,664 to 162,265 at Q26.6 and Q28.4, up to 16 million at Q30.2.
+  These formats now carry the coefficients at 48 bits, formed exactly from
+  integer square roots on the accumulator (`qr_decompose`, `eigen_symmetric`,
+  `svd_decompose`, `schur_decompose`), and the deflation bound is at least
+  `2^-17` relative there (it was `2^-(3F/2)`, `1/8` at Q30.2): the same matrix
+  now decomposes with 0 units of error at every split from Q2.30 to Q30.2.
+  Gate: `large_entries_decompose_without_wrapping`, now run at every split.
+
+### Changed results
+
+- On the 32-bit formats with `F < 16` (Q22.10 among them) the results of
+  `qr_decompose`, `eigen_symmetric`, `svd_decompose`, `schur_decompose` and
+  what is built on them (QR solves, `pseudoinverse`, `rank`,
+  `condition_number_2`) change: by orders of magnitude toward the exact
+  value on entries larger than `2^F` (a QR of entries near `2^19` at Q22.10:
+  317 units to 0.4), and by compute-tier noise elsewhere. A real Schur form
+  or a set of vectors may come back in another equally valid orientation
+  (block order, signs). Q16.16, the 32-bit formats with `F >= 16`, and
+  Q32.32 to Q256.256 take the 0.7.0 code path and return the integers they
+  returned in 0.7.0 (the differential gate checks Q16.16 and Q32.32 to
+  Q256.256 bit for bit against the published 0.6.7).
+
+### Testing
+
+- The random gate's Schur reading of a 2×2 block is exact on every format
+  (it read the wide formats from two rounded products, which near a small
+  imaginary part was off by several units: the dyadic class read 4 to 8
+  units per unit of scale at Q64.64 and wider, 1 now), and a kept block
+  must have a negative discriminant on its returned values, without
+  tolerance. The gate's bounds are recalibrated to 0.7.1's measurements
+  (eight corpora of 512 matrices per decomposition, every format and the
+  32-bit word at F = 8 to 24; four times the largest value, which no seed
+  exceeded the others by more than twice): spectrum bounds of 4 to 44
+  units, against up to 10^27 before.
+- The differential gate checks Q16.16 and Q32.32 to Q256.256 bit for bit
+  as before. On the Q22.10 build the rotation-based decompositions are
+  checked against exact (`Mpf`) values instead: QR factors entry by entry
+  (no farther from exact than 0.6.7, or within 4 units), spectra within 4
+  units, Schur forms by their spectrum, and QR solves in aggregate (closer
+  on 60 of 95 moved components, half the total distance to exact).
 
 ## [0.7.0] - 2026-10-17
 

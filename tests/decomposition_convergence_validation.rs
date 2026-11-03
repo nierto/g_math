@@ -205,80 +205,31 @@ macro_rules! suite {
                 Ok(())
             }
 
-            /// Eigenvalues `(re, im)` of the 2×2 block `[a b; c d]`, from its
-            /// discriminant `(a - d)² + 4bc`: complex for a negative one, a double or
-            /// nearly double real pair for one within the reading's own rounding, and an
-            /// error for one clearly above zero (real eigenvalues the decomposition should
-            /// have split off). `schur_decompose` splits a block whose discriminant, formed
-            /// at the compute tier from the stored entries, is non-negative.
-            ///
-            /// On the narrow formats the discriminant is formed exactly on the raws
-            /// (units of ulp², so that a block the decomposition left whole reads at most
-            /// 2); on the wide ones at storage precision (two rounded products, at most 3
-            /// ulps), where the corpus' entries are far from the range limit.
-            /// A raw as i128 on any word (the narrow words' raws fit).
-            fn raw_i128(x: FixedPoint) -> i128 {
-                let r = x.raw();
-                let neg = <$S as g_math::fixed_point::WideInt>::is_negative(r);
-                let m = if neg { -r } else { r };
-                let n = <$S as g_math::fixed_point::WideInt>::bit_length(m);
-                assert!(n <= 127, "raw beyond i128");
-                let mut acc = 0i128;
-                for i in 0..n { if <$S as g_math::fixed_point::WideInt>::bit(m, i) { acc |= 1i128 << i; } }
-                if neg { -acc } else { acc }
-            }
-            /// The 2x2 block's eigenvalues: exactly in i128 on the 32- and 64-bit words, at the format otherwise.
+            /// Eigenvalues `(re, im)` of a 2×2 block `[a b; c d]` the decomposition kept
+            /// whole, read exactly on every format: the discriminant `(a - d)² + 4bc` is
+            /// formed on the raws in the compute word (exact products, units of ulp²), and
+            /// `im = sqrt(-disc) / 2`, `re = (a + d) / 2` are rounded to the nearest ulp.
+            /// `schur_decompose` keeps a block only when this discriminant of the returned
+            /// values is negative (0.7.1), so a block with any other is an error. (Up to
+            /// 0.7.1 the wide formats were read from two rounded products, which near a
+            /// small imaginary part was off by several ulps: the dyadic class read 4 to 8.)
             fn block_eigenvalues(a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint) -> Result<[(FixedPoint, FixedPoint); 2], String> {
-                if BITS <= 64 { block_eigenvalues_exact(a, b, c, d) } else { block_eigenvalues_fixed(a, b, c, d) }
-            }
-
-            fn block_eigenvalues_exact(a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint) -> Result<[(FixedPoint, FixedPoint); 2], String> {
-                let (a, b, c, d) = (raw_i128(a), raw_i128(b), raw_i128(c), raw_i128(d));
-                let gap_squared = (a - d).checked_mul(a - d).expect("2x2 block beyond the exact reading");
-                let four_bc = b.checked_mul(c).and_then(|bc| bc.checked_mul(4)).expect("2x2 block beyond the exact reading");
-                let disc = gap_squared.checked_add(four_bc).expect("2x2 block beyond the exact reading");
-                let re = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::from_i128(((a + d) / 2) as i128));
-                if disc < 0 {
-                    let im = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::from_i128((isqrt(disc.unsigned_abs()) / 2) as i128));
-                    Ok([(re, -im), (re, im)])
-                } else if disc <= 2 {
-                    let half_gap = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::from_i128((isqrt(disc as u128) / 2) as i128));
-                    Ok([(re - half_gap, FixedPoint::ZERO), (re + half_gap, FixedPoint::ZERO)])
-                } else {
-                    Err(format!("real eigenvalues (discriminant {disc} ulp²)"))
+                use g_math::fixed_point::{Storage, WideInt};
+                type C = <$S as Storage>::Compute;
+                let beyond = "2x2 block beyond the exact reading";
+                let gap = a.raw().checked_sub_wide(d.raw()).expect(beyond);
+                let bc = b.raw().mul_wide(c.raw());
+                let four_bc = bc.checked_add_wide(bc).and_then(|x| x.checked_add_wide(x)).expect(beyond);
+                let disc = gap.mul_wide(gap).checked_add_wide(four_bc).expect(beyond);
+                if !disc.is_negative() {
+                    return Err(format!("real eigenvalues (discriminant >= 0, {} bits, in ulp²)", disc.bit_length()));
                 }
-            }
-
-            fn block_eigenvalues_fixed(a: FixedPoint, b: FixedPoint, c: FixedPoint, d: FixedPoint) -> Result<[(FixedPoint, FixedPoint); 2], String> {
-                let (two, four) = (FixedPoint::from_int(2), FixedPoint::from_int(4));
-                let gap = a - d;
-                let disc = gap * gap + four * (b * c);
-                let re = (a + d) / two;
-                if disc.is_negative() {
-                    let im = (-disc).sqrt() / two;
-                    Ok([(re, -im), (re, im)])
-                } else if ulps(disc) <= 4 {
-                    let half_gap = disc.sqrt() / two;
-                    Ok([(re - half_gap, FixedPoint::ZERO), (re + half_gap, FixedPoint::ZERO)])
-                } else {
-                    Err(format!("real eigenvalues (discriminant {disc})"))
-                }
-            }
-
-            /// Floor of the square root.
-            #[allow(dead_code)]
-            fn isqrt(n: u128) -> u128 {
-                if n < 2 {
-                    return n;
-                }
-                let mut x = 1u128 << ((128 - n.leading_zeros() + 1) / 2);
-                loop {
-                    let y = (x + n / x) / 2;
-                    if y >= x {
-                        return x;
-                    }
-                    x = y;
-                }
+                // the nearest integer to sqrt(D) / 2 is floor((floor(sqrt(D)) + 1) / 2)
+                let one = <C as WideInt>::one();
+                let (half_root, _) = ((-disc).isqrt() + one).divmod(one + one);
+                let im = FixedPoint::from_raw(<$S as Storage>::narrow(half_root).expect("imaginary part beyond storage"));
+                let re = (a + d) / FixedPoint::from_int(2);
+                Ok([(re, -im), (re, im)])
             }
 
             /// Eigenvalues `(re, im)` read from a real Schur form.
@@ -370,69 +321,66 @@ macro_rules! suite {
                 consumer_per_mille: Option<i32>,
             }
 
-            // Bounds are the measured maxima over the cases, doubled, and at least 4 ulp.
-            // The decompositions are deterministic, so the doubling is headroom for
-            // deliberate algorithm changes, not for noise. Reconstruction and Schur
-            // eigenvalue errors follow the relative deflation bound (2^-(2F/3) of the
-            // neighbouring magnitudes) and grow with the format; spectrum errors of the
-            // symmetric problems stay at a few ulp. The i32 word covers F = 16
-            // and 10 (the configuration the SVD failure was reported on) in one set of
-            // bounds (12 passes them too), and has its own below 10 and above 16.
-
-            // Measured, Q16.16 / Q22.10: SVD 17/10, 14035/4694, 7/8; EIGEN 212/5,
-            // 41673/3046, 5/5; SCHUR 888/288, 169/108, 5/17; large entries 1/777;
-            // consumer 0.343/26.143 per mille.
-            // Measured bounds per word (the 32-bit word by split).
-            const BOUNDS_10_TO_16: ProfileBounds = ProfileBounds {
-                svd: Bounds { spectrum: 34, reconstruction: 28_070, orthogonality: 16 },
-                eigen: Bounds { spectrum: 424, reconstruction: 83_346, orthogonality: 10 },
-                schur: Bounds { spectrum: 1_776, reconstruction: 338, orthogonality: 34 },
-                large_entries: 1_554,
-                consumer_per_mille: Some(53),
-            };
+            // Bounds are the measured maxima over the cases, doubled, and at least 4 ulp
+            // (calibrated on 0.7.1). The decompositions are deterministic, so the
+            // doubling is headroom for deliberate algorithm changes, not for noise.
+            // Reconstruction grows with the entries (the fixed cases reach 600 and
+            // are in raw ulp here); spectra stay at one ulp or below. The i32 word has
+            // one set of bounds for F = 10 to 16 and its own below 10 and above 16.
+            // Measured maxima (spectrum/reconstruction/orthogonality):
+            //   BELOW_10: fixed svd 0/924/2, eigen 0/770/1, schur 1/24/1; large 0; consumer 0.03; random svd 1/4/2, eigen 1/5/3, schur 5/4/3
+            //   10_TO_16: fixed svd 1/1272/2, eigen 0/814/1, schur 1/34/1; large 0; consumer 0.004; random svd 1/4/2, eigen 1/5/3, schur 11/4/3
+            //   ABOVE_16: fixed svd 1/58/2, eigen 1/61/1, schur 1/2/1; large 0; consumer 0; random svd 1/1/3, eigen 1/1/3, schur 10/2/3
+            //   Q32_32: fixed svd 0/1175/1, eigen 0/701/1, schur 1/48/2; large 0; consumer 0; random svd 0/4/2, eigen 0/5/3, schur 3/4/2
+            //   Q64_64: fixed svd 0/810/1, eigen 0/773/2, schur 1/32/1; large 0; consumer 2e-19; random svd 1/3/3, eigen 1/5/3, schur 2/4/2
+            //   Q128_128: fixed svd 0/904/2, eigen 0/738/1, schur 1/25/1; large 0; consumer 3e-38; random svd 1/4/3, eigen 1/5/3, schur 3/4/3
+            //   Q256_256: fixed svd 0/1090/2, eigen 0/678/1, schur 0/32/1; large 0; consumer 0; random svd 1/4/3, eigen 0/4/2, schur 5/4/2
             const BOUNDS_BELOW_10: ProfileBounds = ProfileBounds {
-                svd: Bounds { spectrum: 50, reconstruction: 23_722, orthogonality: 36 },
-                eigen: Bounds { spectrum: 34, reconstruction: 8_868, orthogonality: 10 },
-                schur: Bounds { spectrum: 260, reconstruction: 172, orthogonality: 24 },
-                large_entries: 23_810,
-                consumer_per_mille: Some(68),
+                svd: Bounds { spectrum: 4, reconstruction: 1848, orthogonality: 4 },
+                eigen: Bounds { spectrum: 4, reconstruction: 1540, orthogonality: 4 },
+                schur: Bounds { spectrum: 4, reconstruction: 48, orthogonality: 4 },
+                large_entries: 4,
+                consumer_per_mille: Some(60),
+            };
+            const BOUNDS_10_TO_16: ProfileBounds = ProfileBounds {
+                svd: Bounds { spectrum: 4, reconstruction: 2544, orthogonality: 4 },
+                eigen: Bounds { spectrum: 4, reconstruction: 1628, orthogonality: 4 },
+                schur: Bounds { spectrum: 4, reconstruction: 68, orthogonality: 4 },
+                large_entries: 4,
+                consumer_per_mille: Some(8),
             };
             const BOUNDS_ABOVE_16: ProfileBounds = ProfileBounds {
-                svd: Bounds { spectrum: 34, reconstruction: 26_018, orthogonality: 16 },
-                eigen: Bounds { spectrum: 426, reconstruction: 86_968, orthogonality: 14 },
-                schur: Bounds { spectrum: 1_878, reconstruction: 374, orthogonality: 10 },
+                svd: Bounds { spectrum: 4, reconstruction: 116, orthogonality: 4 },
+                eigen: Bounds { spectrum: 4, reconstruction: 122, orthogonality: 4 },
+                schur: Bounds { spectrum: 4, reconstruction: 4, orthogonality: 4 },
                 large_entries: 4,
                 consumer_per_mille: Some(1),
             };
             const BOUNDS_Q32_32: ProfileBounds = ProfileBounds {
-                svd: Bounds { spectrum: 6, reconstruction: 76_262, orthogonality: 14 },
-                eigen: Bounds { spectrum: 8, reconstruction: 765_732, orthogonality: 10 },
-                schur: Bounds { spectrum: 211_432, reconstruction: 11_378, orthogonality: 12 },
+                svd: Bounds { spectrum: 4, reconstruction: 2350, orthogonality: 4 },
+                eigen: Bounds { spectrum: 4, reconstruction: 1402, orthogonality: 4 },
+                schur: Bounds { spectrum: 4, reconstruction: 96, orthogonality: 4 },
                 large_entries: 4,
                 consumer_per_mille: Some(1),
             };
             const BOUNDS_Q64_64: ProfileBounds = ProfileBounds {
-                svd: Bounds { spectrum: 6, reconstruction: 63_497_124, orthogonality: 22 },
-                eigen: Bounds { spectrum: 8, reconstruction: 107_460_842, orthogonality: 12 },
-                schur: Bounds { spectrum: 39_456_416, reconstruction: 27_197_456, orthogonality: 12 },
+                svd: Bounds { spectrum: 4, reconstruction: 1620, orthogonality: 4 },
+                eigen: Bounds { spectrum: 4, reconstruction: 1546, orthogonality: 4 },
+                schur: Bounds { spectrum: 4, reconstruction: 64, orthogonality: 4 },
                 large_entries: 4,
                 consumer_per_mille: Some(1),
             };
             const BOUNDS_Q128_128: ProfileBounds = ProfileBounds {
-                svd: Bounds { spectrum: 8, reconstruction: 107_271_347_397_000, orthogonality: 20 },
-                eigen: Bounds { spectrum: 8, reconstruction: 29_624_964_842_586, orthogonality: 16 },
-                schur: Bounds { spectrum: 4_103_486_472, reconstruction: 4_102_303_322, orthogonality: 12 },
+                svd: Bounds { spectrum: 4, reconstruction: 1808, orthogonality: 4 },
+                eigen: Bounds { spectrum: 4, reconstruction: 1476, orthogonality: 4 },
+                schur: Bounds { spectrum: 4, reconstruction: 50, orthogonality: 4 },
                 large_entries: 4,
                 consumer_per_mille: Some(1),
             };
             const BOUNDS_Q256_256: ProfileBounds = ProfileBounds {
-                svd: Bounds { spectrum: 6, reconstruction: 73_489_317_889_812_305_399_096_222, orthogonality: 24 },
-                eigen: Bounds { spectrum: 10, reconstruction: 268_715_080_342_438_413_877_596_356, orthogonality: 14 },
-                schur: Bounds {
-                    spectrum: 8_132_908_313_713_515_314,
-                    reconstruction: 60_938_714_818_544_275_956,
-                    orthogonality: 18,
-                },
+                svd: Bounds { spectrum: 4, reconstruction: 2180, orthogonality: 4 },
+                eigen: Bounds { spectrum: 4, reconstruction: 1356, orthogonality: 4 },
+                schur: Bounds { spectrum: 4, reconstruction: 64, orthogonality: 4 },
                 large_entries: 4,
                 consumer_per_mille: Some(1),
             };
@@ -536,7 +484,8 @@ macro_rules! suite {
             /// singular values `2x, x, x`.
             #[test]
             fn large_entries_decompose_without_wrapping() {
-                let x = half_max() / FixedPoint::from_int(8);
+                // an eighth of half the maximum, exactly (8 itself is beyond Q2.30 and Q4.28)
+                let x = FixedPoint::from_raw(<$S as g_math::fixed_point::WideInt>::shr_bits(half_max().raw(), 3));
                 let a = FixedMatrix::from_fn(3, 3, |i, j| if i == j { FixedPoint::ZERO } else { x });
                 let two_x = x + x;
 
@@ -612,53 +561,46 @@ macro_rules! suite {
             }
 
             // Bounds are four times the largest value over calibration corpora drawn from
-            // seeds 910001 to 910008 (512 cases per decomposition each, as many seeds as
-            // noted per format; the i32 word at both F = 16 and 10, and apart
-            // at 8 and at 20 and 24), at least 8. Spectrum and reconstruction are per
-            // unit of scale. Across seeds, a single 512-case corpus reached at most 2.5
-            // times the largest value of all the others, except where a case deflates at
-            // the looser sqrt(quantum) bound (Schur at Q64.64 and wider, entries of k/64:
-            // 7.2 times), so those two Schur bounds carry sixteen times instead.
-
-            // Measured random-corpus bounds per word (the 32-bit word by split).
+            // seeds 910001 to 910008 (512 cases per decomposition each, every format and
+            // the i32 word at F = 8, 10, 12, 16, 20 and 24; calibrated on 0.7.1), at
+            // least 8. Spectrum and reconstruction are per unit of scale. Across seeds,
+            // a single corpus reached at most 2 times the largest value of all the
+            // others (leave-one-out over every format, decomposition and measure), so
+            // four times is headroom for an unseen seed, not for a regression.
             const RANDOM_BOUNDS_BELOW_10: CorpusBounds = CorpusBounds {
-                svd: Bounds { spectrum: 20, reconstruction: 172, orthogonality: 176 },
-                eigen: Bounds { spectrum: 28, reconstruction: 92, orthogonality: 48 },
-                schur: Bounds { spectrum: 252, reconstruction: 288, orthogonality: 608 },
-            };
-            const RANDOM_BOUNDS_ABOVE_16: CorpusBounds = CorpusBounds {
-                svd: Bounds { spectrum: 60, reconstruction: 548, orthogonality: 44 },
-                eigen: Bounds { spectrum: 32, reconstruction: 984, orthogonality: 52 },
-                schur: Bounds { spectrum: 2_156, reconstruction: 324, orthogonality: 72 },
+                svd: Bounds { spectrum: 8, reconstruction: 16, orthogonality: 8 },
+                eigen: Bounds { spectrum: 8, reconstruction: 20, orthogonality: 12 },
+                schur: Bounds { spectrum: 20, reconstruction: 16, orthogonality: 12 },
             };
             const RANDOM_BOUNDS_10_TO_16: CorpusBounds = CorpusBounds {
-                svd: Bounds { spectrum: 60, reconstruction: 548, orthogonality: 56 },
-                eigen: Bounds { spectrum: 32, reconstruction: 980, orthogonality: 48 },
-                schur: Bounds { spectrum: 2_208, reconstruction: 328, orthogonality: 324 },
+                svd: Bounds { spectrum: 8, reconstruction: 16, orthogonality: 8 },
+                eigen: Bounds { spectrum: 8, reconstruction: 20, orthogonality: 12 },
+                schur: Bounds { spectrum: 44, reconstruction: 16, orthogonality: 12 },
+            };
+            const RANDOM_BOUNDS_ABOVE_16: CorpusBounds = CorpusBounds {
+                svd: Bounds { spectrum: 8, reconstruction: 8, orthogonality: 12 },
+                eigen: Bounds { spectrum: 8, reconstruction: 8, orthogonality: 12 },
+                schur: Bounds { spectrum: 40, reconstruction: 8, orthogonality: 12 },
             };
             const RANDOM_BOUNDS_Q32_32: CorpusBounds = CorpusBounds {
-                svd: Bounds { spectrum: 16, reconstruction: 16_068, orthogonality: 48 },
-                eigen: Bounds { spectrum: 32, reconstruction: 23_348, orthogonality: 64 },
-                schur: Bounds { spectrum: 32_340, reconstruction: 13_584, orthogonality: 56 },
+                svd: Bounds { spectrum: 8, reconstruction: 16, orthogonality: 8 },
+                eigen: Bounds { spectrum: 8, reconstruction: 20, orthogonality: 12 },
+                schur: Bounds { spectrum: 12, reconstruction: 16, orthogonality: 8 },
             };
             const RANDOM_BOUNDS_Q64_64: CorpusBounds = CorpusBounds {
-                svd: Bounds { spectrum: 16, reconstruction: 19_377_612, orthogonality: 56 },
-                eigen: Bounds { spectrum: 32, reconstruction: 41_911_976, orthogonality: 56 },
-                schur: Bounds { spectrum: 121_576_576, reconstruction: 450_246_752, orthogonality: 68 },
+                svd: Bounds { spectrum: 8, reconstruction: 12, orthogonality: 12 },
+                eigen: Bounds { spectrum: 8, reconstruction: 20, orthogonality: 12 },
+                schur: Bounds { spectrum: 8, reconstruction: 16, orthogonality: 8 },
             };
             const RANDOM_BOUNDS_Q128_128: CorpusBounds = CorpusBounds {
-                svd: Bounds { spectrum: 12, reconstruction: 29_404_403_498_228, orthogonality: 52 },
-                eigen: Bounds { spectrum: 36, reconstruction: 46_427_422_125_792, orthogonality: 52 },
-                schur: Bounds { spectrum: 201_753_831_204_272, reconstruction: 83_986_275_536_928, orthogonality: 64 },
+                svd: Bounds { spectrum: 8, reconstruction: 16, orthogonality: 12 },
+                eigen: Bounds { spectrum: 8, reconstruction: 20, orthogonality: 12 },
+                schur: Bounds { spectrum: 12, reconstruction: 16, orthogonality: 12 },
             };
             const RANDOM_BOUNDS_Q256_256: CorpusBounds = CorpusBounds {
-                svd: Bounds { spectrum: 16, reconstruction: 261_057_119_019_282_174_149_342_344, orthogonality: 52 },
-                eigen: Bounds { spectrum: 36, reconstruction: 318_213_108_790_687_541_130_479_928, orthogonality: 68 },
-                schur: Bounds {
-                    spectrum: 1_564_411_180_459_406_851_770_863_616,
-                    reconstruction: 1_080_767_994_382_447_196_611_948_112,
-                    orthogonality: 84,
-                },
+                svd: Bounds { spectrum: 8, reconstruction: 16, orthogonality: 12 },
+                eigen: Bounds { spectrum: 8, reconstruction: 16, orthogonality: 8 },
+                schur: Bounds { spectrum: 20, reconstruction: 16, orthogonality: 8 },
             };
             const RANDOM_BOUNDS: CorpusBounds = if BITS == 32 {
                 if FRAC_BITS < 10 { RANDOM_BOUNDS_BELOW_10 } else if FRAC_BITS > 16 { RANDOM_BOUNDS_ABOVE_16 } else { RANDOM_BOUNDS_10_TO_16 }
