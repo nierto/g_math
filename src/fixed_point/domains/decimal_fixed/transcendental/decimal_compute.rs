@@ -12,9 +12,9 @@
 //! |------------|------------|----------------------------|
 //! | i64        | i128       | (val as i128)              |
 //! | i128       | I256       | I256::from_i128            |
-//! | I256       | I512       | I256::mul_to_i512          |
-//! | I512       | I1024      | I512::mul_to_i1024         |
-//! | I1024      | I2048      | I1024::mul_to_i2048        |
+//! | I256       | I512       | I256::mul_unsigned_to_i512          |
+//! | I512       | I1024      | I512::mul_unsigned_to_i1024         |
+//! | I1024      | I2048      | I1024::mul_unsigned_to_i2048        |
 
 #[allow(unused_imports)]
 #[allow(unused_imports)]

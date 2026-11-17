@@ -288,13 +288,11 @@ impl I512 {
         // Multiply to I1024 and check if result fits in I512
         let result_i1024 = self.multiply_i512(&rhs);
 
-        // Check if result fits in I512 (check upper 512 bits are sign extension)
-        let is_negative = (result_i1024.words[15] as i64) < 0;
-        let expected_high = if is_negative { u64::MAX } else { 0 };
-
-        let fits = (8..16).all(|i| result_i1024.words[i] == expected_high);
-
-        if fits {
+        // Fits iff words 8..16 are the sign extension of bit 511. Before
+        // 0.7.2 this compared them with bit 1023 instead, so a positive
+        // product in [2^511, 2^512) (such as -1 * MIN) was returned as a
+        // negative I512.
+        if result_i1024.fits_in_i512() {
             Some(I512::from_words([
                 result_i1024.words[0],
                 result_i1024.words[1],
@@ -695,8 +693,26 @@ impl I512 {
     /// **ALGORITHM**: Grade-school multiplication with carry propagation
     /// **PRECISION**: Full 1024-bit result, no truncation
     /// **TIER N+1**: Enables error-less Q256.256 exp computation
+    ///
+    /// Signed and exact since 0.7.2 (it read both operands as unsigned
+    /// before: high half wrong whenever an operand was negative).
     #[inline(always)]
     pub fn mul_to_i1024(&self, other: I512) -> crate::fixed_point::I1024 {
+        let mut p = self.mul_unsigned_to_i1024(other);
+        if self.is_negative() {
+            crate::fixed_point::domains::binary_fixed::i256::sub_from_high_words(&mut p.words, &other.words);
+        }
+        if other.is_negative() {
+            crate::fixed_point::domains::binary_fixed::i256::sub_from_high_words(&mut p.words, &self.words);
+        }
+        p
+    }
+
+    /// The product of the two bit patterns read as UNSIGNED 512-bit numbers
+    /// (the body `mul_to_i1024` had before 0.7.2). Internal: callers pass
+    /// magnitudes or non-negative values.
+    #[inline(always)]
+    pub(crate) fn mul_unsigned_to_i1024(&self, other: I512) -> crate::fixed_point::I1024 {
         use crate::fixed_point::I1024;
 
         let mut result = I1024::zero();

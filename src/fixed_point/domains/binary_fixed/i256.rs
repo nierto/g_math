@@ -239,10 +239,24 @@ impl I256 {
         a_i512 * b_i512
     }
     
-    /// Multiply two I256 values returning I512 result (full precision)
+    /// Multiply two I256 values returning the exact signed I512 product.
+    ///
+    /// Before 0.7.2 this read both operands as unsigned 256-bit numbers: the
+    /// low half was right, the high half wrong whenever an operand was
+    /// negative (so `checked_mul` returned `None` for every negative operand).
     #[inline(always)]
     pub fn mul_to_i512(self, rhs: I256) -> crate::fixed_point::I512 {
         mul_i256_to_i512(self, rhs)
+    }
+
+    /// The product of the two bit patterns read as UNSIGNED 256-bit numbers.
+    /// Equal to `mul_to_i512` when neither operand is negative; the internal
+    /// callers pass magnitudes (up to 2^255, the magnitude of `MIN`, which the
+    /// signed product cannot take) or values that are non-negative by
+    /// construction.
+    #[inline(always)]
+    pub(crate) fn mul_unsigned_to_i512(self, rhs: I256) -> crate::fixed_point::I512 {
+        mul_unsigned_i256_to_i512(self, rhs)
     }
 
     /// Checked addition - returns None on overflow
@@ -535,8 +549,9 @@ impl Mul for I256 {
 
     #[inline(always)]
     fn mul(self, rhs: Self) -> Self {
-        // Proper I256×I256→I512 multiplication, then truncate to I256
-        let result_i512 = self.mul_to_i512(rhs);
+        // the low 256 bits of the product are the same read signed or
+        // unsigned; the signed correction only touches the high half
+        let result_i512 = self.mul_unsigned_to_i512(rhs);
         result_i512.as_i256()
     }
 }
@@ -716,9 +731,43 @@ pub fn mul_i128_to_i256_bmi2(a: i128, b: i128) -> I256 {
     }
 }
 
-/// Full I256×I256→I512 multiplication for maximum precision
+/// Full signed I256×I256→I512 multiplication: the exact product.
+///
+/// The unsigned product of the two's-complement bit patterns, corrected in the
+/// high half: reading a negative `a` as unsigned adds 2^256, so
+/// `a*b = a_u*b_u - 2^256*(b_u [a < 0] + a_u [b < 0])  (mod 2^512)`.
 #[inline(always)]
 pub fn mul_i256_to_i512(a: I256, b: I256) -> crate::fixed_point::I512 {
+    let mut p = mul_unsigned_i256_to_i512(a, b);
+    if a.is_negative() {
+        sub_from_high_words(&mut p.words, &b.words);
+    }
+    if b.is_negative() {
+        sub_from_high_words(&mut p.words, &a.words);
+    }
+    p
+}
+
+/// `words[n..2n] -= sub` modulo 2^(64 n): the signed correction of a widening
+/// product's high half.
+#[inline(always)]
+pub(crate) fn sub_from_high_words(words: &mut [u64], sub: &[u64]) {
+    let n = sub.len();
+    debug_assert_eq!(words.len(), 2 * n);
+    let mut borrow = false;
+    for i in 0..n {
+        let (d1, b1) = words[n + i].overflowing_sub(sub[i]);
+        let (d2, b2) = d1.overflowing_sub(borrow as u64);
+        words[n + i] = d2;
+        borrow = b1 | b2;
+    }
+}
+
+/// I256×I256→I512 of the bit patterns read as UNSIGNED 256-bit numbers (the
+/// body `mul_i256_to_i512` had before 0.7.2). Internal: callers pass
+/// magnitudes or non-negative values.
+#[inline(always)]
+pub(crate) fn mul_unsigned_i256_to_i512(a: I256, b: I256) -> crate::fixed_point::I512 {
     // Implement proper 256×256→512 bit multiplication
     // Algorithm: (a_hi*2^128 + a_lo) * (b_hi*2^128 + b_lo)
     //          = a_hi*b_hi*2^256 + (a_hi*b_lo + a_lo*b_hi)*2^128 + a_lo*b_lo

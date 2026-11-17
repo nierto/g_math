@@ -1131,7 +1131,7 @@ impl FixedNum for Fixed<I256, 128> {
     #[inline]
     fn try_fixed_multiply(a: I256, b: I256) -> Result<I256, OverflowDetected> {
         let overflow = OverflowDetected::TierOverflow;
-        // I256*I256->I512 on magnitudes (mul_to_i512 is unsigned), read by
+        // I256*I256->I512 on magnitudes (mul_unsigned_to_i512 is unsigned), read by
         // words: the magnitude before rounding is words 2..6, the remainder
         // words 0..2. A positive result rounds the magnitude up on
         // remainder >= half (tie up), a negative one only on remainder > half
@@ -1141,7 +1141,7 @@ impl FixedNum for Fixed<I256, 128> {
         let result_neg = a_neg != b_neg;
         let abs_a = if a_neg { -a } else { a };
         let abs_b = if b_neg { -b } else { b };
-        let w = abs_a.mul_to_i512(abs_b).words;
+        let w = abs_a.mul_unsigned_to_i512(abs_b).words;
         let top = 1u64 << 63;
         let bump = if result_neg { w[1] > top || (w[1] == top && w[0] != 0) } else { w[1] >= top };
         if w[6] != 0 || w[7] != 0 || w[5] > top {
@@ -1312,12 +1312,12 @@ impl FixedNum for Fixed<I512, 256> {
     fn compute_checked_multiply(a: I1024, b: I1024) -> Result<I1024, OverflowDetected> {
         const OVERFLOW: OverflowDetected = OverflowDetected::TierOverflow;
         // I1024 x I1024 -> I2048 >> 512 on magnitudes, as multiply_i1024_q512_512
-        // (mul_to_i2048 is unsigned), with the narrowing checked
+        // (mul_unsigned_to_i2048 is unsigned), with the narrowing checked
         let a_negative = a < I1024::zero();
         let b_negative = b < I1024::zero();
         let abs_a = if a_negative { I1024::zero() - a } else { a };
         let abs_b = if b_negative { I1024::zero() - b } else { b };
-        let product = abs_a.mul_to_i2048(abs_b);
+        let product = abs_a.mul_unsigned_to_i2048(abs_b);
         let rounded = (product + (I2048::from_i128(1) << 511)) >> 512;
         if !(rounded.fits_in_i1024()) { return Err(OVERFLOW); }
         let magnitude = rounded.as_i1024();
@@ -1376,7 +1376,7 @@ impl FixedNum for Fixed<I512, 256> {
         let result_neg = a_neg != b_neg;
         let abs_a = if a_neg { -a } else { a };
         let abs_b = if b_neg { -b } else { b };
-        let w = abs_a.mul_to_i1024(abs_b).words;
+        let w = abs_a.mul_unsigned_to_i1024(abs_b).words;
         let top = 1u64 << 63;
         let bump = if result_neg {
             w[3] > top || (w[3] == top && (w[0] | w[1] | w[2]) != 0)

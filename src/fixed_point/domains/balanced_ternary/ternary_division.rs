@@ -251,7 +251,7 @@ pub fn divide_ternary_tq320_320(a: I1024, b: I1024) -> I1024 {
     let q_neg = (q.words[31] as i64) < 0;
     let abs_q = if q_neg { -q } else { q };
     let abs_b = if b_neg { -b } else { b };
-    let qb = abs_q.as_i1024().mul_to_i2048(abs_b); // non-negative magnitudes — safe
+    let qb = abs_q.as_i1024().mul_unsigned_to_i2048(abs_b); // non-negative magnitudes — safe
     let rem = abs_sa - qb;
     let rem2 = rem + rem;
     let abs_b_wide = I2048::from_i1024(abs_b);

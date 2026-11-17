@@ -126,7 +126,9 @@ listed for completeness, no change:
 
 ## Appendix (0b, 2026-08-23): unsigned widening-multiply call-site audit
 
-Classification of every `mul_to_i512/i1024/i2048` caller: see ROADMAP
+Since 0.7.2 the public `mul_to_i512/i1024/i2048` are signed; the callers
+classified here use the unsigned twins `mul_unsigned_to_i512/i1024/i2048`
+(crate-private), unchanged. Classification of every caller: see ROADMAP
 item 0b (delivered) for the summary. Verdicts: sign-wrapped ✓ (linalg ×8,
 decimal_compute ×3, compute_multiply, ln's Q128/Q256/Q512 helpers, ternary
 0.4.34 fixes, I2048::Mul); positive-by-construction now debug_asserted

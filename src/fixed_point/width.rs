@@ -546,7 +546,7 @@ impl Storage for i128 {
     #[inline] fn orient(self) -> I512 { I512::from_i128(self) }
     #[inline]
     fn widen_product(a: I256, b: I256) -> I512 {
-        budgeted_widening_product!(a, b, mul_to_i512, I512)
+        budgeted_widening_product!(a, b, mul_unsigned_to_i512, I512)
     }
     #[inline] fn widen_compute(c: I256) -> I512 { I512::from_i256(c) }
     #[inline]
@@ -571,7 +571,7 @@ impl Storage for I256 {
     type Compute = I512;
     type Orient = I1024; // W = 256: 514 / 771 bits
     #[inline] fn widen(self) -> I512 { I512::from_i256(self) }
-    #[inline] fn mul_wide(self, rhs: Self) -> I512 { signed_widening_product!(self, rhs, mul_to_i512) }
+    #[inline] fn mul_wide(self, rhs: Self) -> I512 { signed_widening_product!(self, rhs, mul_unsigned_to_i512) }
     #[inline]
     fn narrow(c: I512) -> Option<Self> {
         if c.fits_in_i256() { Some(c.as_i256()) } else { None }
@@ -579,7 +579,7 @@ impl Storage for I256 {
     #[inline] fn orient(self) -> I1024 { I1024::from_i256(self) }
     #[inline]
     fn widen_product(a: I512, b: I512) -> I1024 {
-        budgeted_widening_product!(a, b, mul_to_i1024, I1024)
+        budgeted_widening_product!(a, b, mul_unsigned_to_i1024, I1024)
     }
     #[inline] fn widen_compute(c: I512) -> I1024 { I1024::from_i512(c) }
     #[inline]
@@ -604,7 +604,7 @@ impl Storage for I512 {
     type Compute = I1024;
     type Orient = I2048; // W = 512: 1026 / 1539 bits; circle predicates exceed 2048
     #[inline] fn widen(self) -> I1024 { I1024::from_i512(self) }
-    #[inline] fn mul_wide(self, rhs: Self) -> I1024 { signed_widening_product!(self, rhs, mul_to_i1024) }
+    #[inline] fn mul_wide(self, rhs: Self) -> I1024 { signed_widening_product!(self, rhs, mul_unsigned_to_i1024) }
     #[inline]
     fn narrow(c: I1024) -> Option<Self> {
         if c.fits_in_i512() { Some(c.as_i512()) } else { None }
@@ -612,7 +612,7 @@ impl Storage for I512 {
     #[inline] fn orient(self) -> I2048 { I2048::from_i512(self) }
     #[inline]
     fn widen_product(a: I1024, b: I1024) -> I2048 {
-        budgeted_widening_product!(a, b, mul_to_i2048, I2048)
+        budgeted_widening_product!(a, b, mul_unsigned_to_i2048, I2048)
     }
     #[inline] fn widen_compute(c: I1024) -> I2048 { I2048::from_i1024(c) }
     #[inline]

@@ -22,9 +22,11 @@ Two mechanisms, and only two.
 representations `a_raw` and `b_raw` at scale `2^F`, the integer `a_raw * b_raw`
 is the value `a * b` at scale `2^(2F)`, which is exactly the compute tier's
 scale. The library already computes this product exactly (i32 x i32 in i64, i64
-x i64 in i128, i128 x i128 in I256 via `mul_i128_to_i256`, and the unsigned
-`mul_to_i512` / `mul_to_i1024` on magnitudes with the sign reapplied, the same
-pattern the scalar `fixed_multiply` uses). Sums of such products accumulate with
+x i64 in i128, i128 x i128 in I256 via `mul_i128_to_i256`, and the
+`I256`/`I512` widening products on magnitudes with the sign reapplied, the same
+pattern the scalar `fixed_multiply` uses; the public `mul_to_i512` /
+`mul_to_i1024` are signed since 0.7.2, the internal callers use their unsigned
+twins on magnitudes). Sums of such products accumulate with
 `compute_checked_add`, so an accumulation that would leave the compute tier is a
 typed `TierOverflow`, never a wrapped value.
 

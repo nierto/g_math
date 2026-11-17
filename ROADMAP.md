@@ -554,6 +554,17 @@ binaries, about 6700 tests) and compares every public operation with the
 published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
 `docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
 
+### v0.7.2: signed wide-integer products
+
+**Release 2026-11-17.** `I256::mul_to_i512`, `I512::mul_to_i1024` and
+`I1024::mul_to_i2048` read their operands as unsigned, so `I256::checked_mul`
+returned `None` for every negative operand (consumer report). They return
+the exact signed product now; `I512::checked_mul` no longer accepts a
+positive product in `[2^511, 2^512)`, and the `D256` widening product, which
+split operands into signed `i128` halves, is exact. Internal callers keep the
+unsigned body (crate-private) and pass magnitudes, so no library result
+changes. Gate: every multiply of the six wide integer types against `BigInt`.
+
 ### v0.7.1: Schur blocks decided on the returned values; wide coefficients
 
 **Release 2026-11-02.** `schur_decompose` decided whether a converged 2×2

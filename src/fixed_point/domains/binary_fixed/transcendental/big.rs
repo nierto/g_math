@@ -253,7 +253,7 @@ impl Big {
     pub fn mul(self, o: Big) -> Big {
         let err = sums(&[emul(self.vb(), o.err), emul(o.vb(), self.err), emul(self.err, o.err)]);
         if self.is_zero() || o.is_zero() { return Big::zero().with_err(err); }
-        let prod = self.m.mul_to_i2048(o.m);
+        let prod = self.m.mul_unsigned_to_i2048(o.m);
         let (r, round) = Big::norm(self.neg != o.neg, prod, self.e + o.e - 2 * PI64);
         r.with_err(sum(err, round))
     }

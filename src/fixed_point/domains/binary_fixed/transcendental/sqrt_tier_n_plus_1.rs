@@ -315,14 +315,14 @@ pub fn sqrt_q512_512_native(x: I1024) -> I1024 {
     let target = crate::fixed_point::I2048::from_i1024(m) << 512usize;
     let unit = I1024::from_i128(1);
     let mut steps = 0u32;
-    while r.mul_to_i2048(r) > target {
+    while r.mul_unsigned_to_i2048(r) > target {
         r = r - unit;
         steps += 1;
         assert!(steps <= 8, "sqrt_q512_512_native: certificate correction exceeded its bound (downward)");
     }
     loop {
         let next = r + unit;
-        if next.mul_to_i2048(next) <= target {
+        if next.mul_unsigned_to_i2048(next) <= target {
             r = next;
             steps += 1;
             assert!(steps <= 8, "sqrt_q512_512_native: certificate correction exceeded its bound (upward)");
@@ -344,7 +344,7 @@ pub fn sqrt_q512_512_native(x: I1024) -> I1024 {
 /// sign-safe ln helper), assumed positive-by-construction and asserted as
 /// such, and the assert then FIRED on Q256.256 SPD-distance inputs:
 /// the Newton factor `3 − S·y²` goes NEGATIVE when the seed overshoots,
-/// so the raw unsigned `mul_to_i2048` here was a real latent corruption
+/// so the raw unsigned `mul_unsigned_to_i2048` here was a real latent corruption
 /// path for overshooting inputs. Now sign-wrapped. Magnitude truncation
 /// is kept (identical to the old behavior for the positive common case,
 /// so the validated Newton trajectory is unchanged there).
@@ -355,7 +355,7 @@ pub(crate) fn multiply_i1024_q512_512_signed(a: I1024, b: I1024) -> I1024 {
     let b_neg = b < I1024::zero();
     let abs_a = if a_neg { -a } else { a };
     let abs_b = if b_neg { -b } else { b };
-    let full = abs_a.mul_to_i2048(abs_b);
+    let full = abs_a.mul_unsigned_to_i2048(abs_b);
     let mag = (full >> 512).as_i1024();
     if a_neg != b_neg { -mag } else { mag }
 }

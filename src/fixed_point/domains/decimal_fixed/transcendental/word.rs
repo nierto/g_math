@@ -576,7 +576,7 @@ impl DecimalWord for I256 {
             let result_neg = a_neg ^ b_neg;
             let abs_a = if a_neg { I256::zero() - a } else { a };
             let abs_b = if b_neg { I256::zero() - b } else { b };
-            let abs_product = abs_a.mul_to_i512(abs_b);
+            let abs_product = abs_a.mul_unsigned_to_i512(abs_b);
             if result_neg { I512::zero() - abs_product } else { abs_product }
         }
     }
@@ -798,7 +798,7 @@ impl DecimalWord for I512 {
             let result_neg = a_neg ^ b_neg;
             let abs_a = if a_neg { I512::zero() - a } else { a };
             let abs_b = if b_neg { I512::zero() - b } else { b };
-            let abs_product = abs_a.mul_to_i1024(abs_b);
+            let abs_product = abs_a.mul_unsigned_to_i1024(abs_b);
             if result_neg { I1024::zero() - abs_product } else { abs_product }
         }
     }
@@ -1039,7 +1039,7 @@ impl DecimalWord for I1024 {
             let result_neg = a_neg ^ b_neg;
             let abs_a = if a_neg { I1024::zero() - a } else { a };
             let abs_b = if b_neg { I1024::zero() - b } else { b };
-            let abs_product = abs_a.mul_to_i2048(abs_b);
+            let abs_product = abs_a.mul_unsigned_to_i2048(abs_b);
             if result_neg { I2048::zero() - abs_product } else { abs_product }
         }
     }

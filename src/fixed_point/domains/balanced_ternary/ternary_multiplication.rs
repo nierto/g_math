@@ -185,13 +185,13 @@ pub fn multiply_ternary_tq160_160(a: I512, b: I512) -> Result<I512, OverflowDete
 
 /// TQ320.320 multiplication (maximum precision, never fails)
 ///
-/// **ALGORITHM**: Uses I2048 intermediate via mul_to_i2048()
+/// **ALGORITHM**: Uses I2048 intermediate via mul_unsigned_to_i2048()
 /// **CHALLENGE**: I2048 has no Div: use two-stage I1024 division
 /// Product / 3^256 = (Product / 3^128) / 3^128
 /// Since 3^128 fits in I512, each stage is I2048/I1024->I1024 (tractable)
 #[inline]
 pub fn multiply_ternary_tq320_320(a: I1024, b: I1024) -> I1024 {
-    // mul_to_i2048 is UNSIGNED word arithmetic by house convention — call
+    // mul_unsigned_to_i2048 is UNSIGNED word arithmetic by house convention — call
     // sites must sign-wrap (see stack_evaluator/compute.rs "MUST use signed
     // multiply" and decimal_compute.rs). This site did not: a negative
     // operand corrupted the product's high words (sign extension lost),
@@ -201,7 +201,7 @@ pub fn multiply_ternary_tq320_320(a: I1024, b: I1024) -> I1024 {
     let negative = (a < zero) ^ (b < zero);
     let abs_a = if a < zero { -a } else { a };
     let abs_b = if b < zero { -b } else { b };
-    let product = abs_a.mul_to_i2048(abs_b);
+    let product = abs_a.mul_unsigned_to_i2048(abs_b);
     // Divide I2048 by 3^256 = (3^128)^2
     // Stage 1: product / 3^128 -> I2048 quotient (using i2048_div_by_i1024)
     let scale_128 = scale_tq160_160_i1024();
@@ -215,7 +215,7 @@ pub fn multiply_ternary_tq320_320(a: I1024, b: I1024) -> I1024 {
     // true remainder product - q*3^256 against half the scale, all on
     // non-negative magnitudes.
     let s256 = scale_128 * scale_128; // 3^256 ≈ 2^406, exact in I1024
-    let qs = magnitude.mul_to_i2048(s256); // both non-negative — safe
+    let qs = magnitude.mul_unsigned_to_i2048(s256); // both non-negative — safe
     let rem = product - qs;
     if rem + rem > I2048::from_i1024(s256) {
         magnitude = magnitude + I1024::from_i128(1);

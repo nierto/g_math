@@ -30,7 +30,7 @@ pub(crate) fn one() -> I1024 { I1024::from_i128(1).shl_bits(P) }
 pub(crate) fn mul(a: I1024, b: I1024) -> I1024 {
     let neg = a.is_negative() != b.is_negative();
     let (ma, mb) = (if a.is_negative() { -a } else { a }, if b.is_negative() { -b } else { b });
-    let p = (ma.mul_to_i2048(mb) >> P as usize).as_i1024();
+    let p = (ma.mul_unsigned_to_i2048(mb) >> P as usize).as_i1024();
     if neg { -p } else { p }
 }
 
@@ -51,7 +51,7 @@ pub(crate) fn div_small(a: I1024, d: u64) -> I1024 {
 pub(crate) fn mul_small(a: I1024, n: i64) -> I1024 {
     let neg = (n < 0) != a.is_negative();
     let ma = if a.is_negative() { -a } else { a };
-    let p = (ma.mul_to_i2048(I1024::from_i128(n.unsigned_abs() as i128))).as_i1024();
+    let p = (ma.mul_unsigned_to_i2048(I1024::from_i128(n.unsigned_abs() as i128))).as_i1024();
     if neg { -p } else { p }
 }
 
@@ -224,7 +224,7 @@ pub fn pow_to_raw<S: WideInt>(x_raw: S, y_raw: S, f: u32) -> Option<S> {
     let y = to_i1024(y_raw);
     let neg = l.is_negative() != y.is_negative();
     let (ml, my) = (if l.is_negative() { -l } else { l }, if y.is_negative() { -y } else { y });
-    let p: I2048 = ml.mul_to_i2048(my) >> f as usize;
+    let p: I2048 = ml.mul_unsigned_to_i2048(my) >> f as usize;
     if p.bit_length() > 1012 { return None; }
     let t = p.as_i1024();
     exp_to_raw::<S>(if neg { -t } else { t }, f)

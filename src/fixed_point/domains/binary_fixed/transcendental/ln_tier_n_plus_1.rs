@@ -718,7 +718,7 @@ pub fn ln_q512_512_native(x: I1024) -> I1024 {
 #[inline(always)]
 #[allow(dead_code)]
 pub(crate) fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
-    // Handle signed multiplication: mul_to_i512 does UNSIGNED multiplication,
+    // Handle signed multiplication: mul_unsigned_to_i512 does UNSIGNED multiplication,
     // so we need to handle signs explicitly (same pattern as multiply_i512_q256_256)
     let a_negative = a < I256::zero();
     let b_negative = b < I256::zero();
@@ -727,7 +727,7 @@ pub(crate) fn multiply_i256_q128_128(a: I256, b: I256) -> I256 {
     let abs_a = if a_negative { I256::zero() - a } else { a };
     let abs_b = if b_negative { I256::zero() - b } else { b };
 
-    let result_i512 = abs_a.mul_to_i512(abs_b);
+    let result_i512 = abs_a.mul_unsigned_to_i512(abs_b);
     let rounding = I512::from_i256(I256::from_i128(1)) << 127;
     let unsigned_result = ((result_i512 + rounding) >> 128).as_i256();
 
@@ -800,7 +800,7 @@ pub(crate) fn taylor_series_ln_i256_q128_128(r: &I256) -> I256 {
 pub(crate) fn multiply_i512_q256_256(a: I512, b: I512) -> I512 {
     use crate::fixed_point::I1024;
 
-    // Handle signed multiplication: mul_to_i1024 does unsigned multiplication,
+    // Handle signed multiplication: mul_unsigned_to_i1024 does unsigned multiplication,
     // so we need to handle signs explicitly
     let a_negative = a < I512::zero();
     let b_negative = b < I512::zero();
@@ -809,7 +809,7 @@ pub(crate) fn multiply_i512_q256_256(a: I512, b: I512) -> I512 {
     let abs_a = if a_negative { I512::zero() - a } else { a };
     let abs_b = if b_negative { I512::zero() - b } else { b };
 
-    let result_i1024 = abs_a.mul_to_i1024(abs_b);
+    let result_i1024 = abs_a.mul_unsigned_to_i1024(abs_b);
     let rounding = I1024::from_i512(I512::from_i256(I256::from_i128(1))) << 255;
     let unsigned_result = ((result_i1024 + rounding) >> 256).as_i512();
 
@@ -842,7 +842,7 @@ pub(crate) fn divide_i512_q256_256(a: I512, b: I512) -> I512 {
 }
 
 /// Multiply two I1024 values in Q512.512 format
-/// **CRITICAL**: mul_to_i2048 does UNSIGNED multiplication, so we handle signs explicitly.
+/// **CRITICAL**: mul_unsigned_to_i2048 does UNSIGNED multiplication, so we handle signs explicitly.
 #[inline(always)]
 #[allow(dead_code)]
 pub(crate) fn multiply_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
@@ -855,7 +855,7 @@ pub(crate) fn multiply_i1024_q512_512(a: I1024, b: I1024) -> I1024 {
     let abs_a = if a_negative { I1024::zero() - a } else { a };
     let abs_b = if b_negative { I1024::zero() - b } else { b };
 
-    let result_i2048 = abs_a.mul_to_i2048(abs_b);
+    let result_i2048 = abs_a.mul_unsigned_to_i2048(abs_b);
     // Round: add 0.5 ULP at Q512.512 = bit 511
     let rounding = I2048::from_i128(1) << 511;
     let unsigned_result = ((result_i2048 + rounding) >> 512).as_i1024();
@@ -968,7 +968,7 @@ pub(crate) fn taylor_series_ln_i1024_q512_512(r: &I1024) -> I1024 {
         return I1024::zero();
     }
     // The 4-stage reduction guarantees r ≥ 0 (tables never overshoot);
-    // that non-negativity is what makes the raw unsigned mul_to_i2048
+    // that non-negativity is what makes the raw unsigned mul_unsigned_to_i2048
     // power/coefficient chain below legal (0.5.0 audit invariant).
     debug_assert!(!(*r < I1024::zero()), "ln Taylor fed negative remainder");
 
@@ -982,7 +982,7 @@ pub(crate) fn taylor_series_ln_i1024_q512_512(r: &I1024) -> I1024 {
 
     for n in 2..=TERMS {
         // r^n = r^(n-1) × r
-        r_power = (r_power.mul_to_i2048(*r) >> 512).as_i1024();
+        r_power = (r_power.mul_unsigned_to_i2048(*r) >> 512).as_i1024();
 
         // Coefficient 1/n from table (UNSIGNED - signs applied below)
         let (coef_main, coef_comp) = LN_TAYLOR_COEFFICIENTS_TIER_6[n];
@@ -990,7 +990,7 @@ pub(crate) fn taylor_series_ln_i1024_q512_512(r: &I1024) -> I1024 {
         let coef = coef_main + coef_comp_contrib;
 
         // term = r^n × (1/n) -- always positive
-        let term = (r_power.mul_to_i2048(coef) >> 512).as_i1024();
+        let term = (r_power.mul_unsigned_to_i2048(coef) >> 512).as_i1024();
 
         // Apply alternating signs: ln(1+r) = r - r²/2 + r³/3 - r⁴/4 + ...
         // Even n: subtract (−r²/2, −r⁴/4, ...)

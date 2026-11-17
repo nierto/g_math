@@ -306,57 +306,18 @@ pub fn mul_i128_to_d256(a: i128, b: i128) -> D256 {
     result
 }
 
-/// Full D256×D256→D512 multiplication for maximum decimal precision
+/// Full signed D256×D256→D512 multiplication: the exact product.
+///
+/// Before 0.7.2 this split each operand into two `i128` halves, which read a
+/// low half with bit 127 set as negative and so returned wrong products for
+/// negative operands and for many positive ones (`1 * -1` gave
+/// `-(2^128 + 1)`). The words are plain two's-complement integers, the same
+/// as `I256`'s, so the product is the exact signed one from there.
 #[inline(always)]
 pub fn mul_d256_to_d512(a: D256, b: D256) -> super::d512::D512 {
-    use super::d512::D512;
-    
-    // Decompose each D256 into two i128 parts
-    let a_lo = ((a.words[1] as i128) << 64) | (a.words[0] as i128);
-    let a_hi = ((a.words[3] as i128) << 64) | (a.words[2] as i128);
-    let b_lo = ((b.words[1] as i128) << 64) | (b.words[0] as i128);
-    let b_hi = ((b.words[3] as i128) << 64) | (b.words[2] as i128);
-    
-    // Compute the four partial products for decimal domain
-    let lo_lo = mul_i128_to_d256(a_lo, b_lo);     // a_lo * b_lo
-    let lo_hi = mul_i128_to_d256(a_lo, b_hi);     // a_lo * b_hi  
-    let hi_lo = mul_i128_to_d256(a_hi, b_lo);     // a_hi * b_lo
-    let hi_hi = mul_i128_to_d256(a_hi, b_hi);     // a_hi * b_hi
-    
-    // Accumulate into 512-bit decimal result
-    let mut result = D512::zero();
-    
-    // Add lo_lo (no shift)
-    result.words[0] = lo_lo.words[0];
-    result.words[1] = lo_lo.words[1];
-    result.words[2] = lo_lo.words[2];
-    result.words[3] = lo_lo.words[3];
-    
-    // Add lo_hi and hi_lo (shift by 128 bits = 2 words)
-    let mid_sum = D256::zero() + lo_hi + hi_lo;
-    let mut carry = 0u64;
-    
-    for i in 0..4 {
-        let word_idx = i + 2; // Shift by 2 words (128 bits)
-        if word_idx < 8 {
-            let sum = (result.words[word_idx] as u128) + (mid_sum.words[i] as u128) + (carry as u128);
-            result.words[word_idx] = sum as u64;
-            carry = (sum >> 64) as u64;
-        }
-    }
-    
-    // Add hi_hi (shift by 256 bits = 4 words)
-    carry = 0;
-    for i in 0..4 {
-        let word_idx = i + 4; // Shift by 4 words (256 bits)
-        if word_idx < 8 {
-            let sum = (result.words[word_idx] as u128) + (hi_hi.words[i] as u128) + (carry as u128);
-            result.words[word_idx] = sum as u64;
-            carry = (sum >> 64) as u64;
-        }
-    }
-    
-    result
+    use crate::fixed_point::domains::binary_fixed::i256::{mul_i256_to_i512, I256};
+    let p = mul_i256_to_i512(I256 { words: a.words }, I256 { words: b.words });
+    super::d512::D512::from_words(p.words)
 }
 
 /// Proper D256 two's complement negation for decimal domain

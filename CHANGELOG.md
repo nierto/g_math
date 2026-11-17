@@ -5,6 +5,42 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-11-17
+
+### Fixed
+
+- **`I256::checked_mul` returned `None` whenever an operand was negative.**
+  `I256::mul_to_i512` (and the free `mul_i256_to_i512` it calls) multiplied
+  the two's-complement words as unsigned numbers: the low 256 bits were
+  right, so the wrapping `*` was correct, but the high half was wrong for any
+  negative operand, and `checked_mul`, which tests that high half, rejected
+  every such product (`-1 * 1`, `-3 * 5`, `(-2^100)^2`). `mul_to_i512` now
+  returns the exact signed product (the unsigned product with the standard
+  correction of the high half). `I512::mul_to_i1024` and
+  `I1024::mul_to_i2048` had the same unsigned reading and are signed now too.
+  Reported by a consumer against 0.7.0 and 0.7.1; present since the first
+  releases.
+- **`I512::checked_mul` returned `Some` for some products that overflow.**
+  It tested the high words against bit 1023 of the product instead of bit
+  511, so a positive product in `[2^511, 2^512)`, such as `-1 * I512::MIN`,
+  came back as a negative `I512`. It now uses `fits_in_i512`.
+- **`D256 * D256`, `D256::mul_to_d512` and `mul_d256_to_d512` returned wrong
+  products.** The widening product split each operand into two signed
+  `i128` halves, so a low half with bit 127 set was read as negative:
+  `1 * -1` gave `-(2^128 + 1)`, and many products of positive operands were
+  wrong as well. It is now the exact signed product.
+
+The library's own arithmetic is unchanged: every internal caller of the
+three widening multiplies passed magnitudes or non-negative values and now
+calls the previous unsigned body under a crate-private name, and none
+called `I256::checked_mul`, `I512::checked_mul` on an overflowing product
+or the `D256` product. The fixes change only what these public integer
+methods return. Gate: `tests/wide_integer_sign_semantics.rs` compares every
+wrapping, widening and checked multiply of `I256`, `I512`, `I1024`,
+`I2048`, `D256` and `D512` (and `mul_i128_to_i256`, `mul_i128_to_d256`)
+with exact `BigInt` products over every sign combination, the extremes and
+seeded random operands of every length; it fails on 0.7.1.
+
 ## [0.7.1] - 2026-11-02
 
 ### Fixed

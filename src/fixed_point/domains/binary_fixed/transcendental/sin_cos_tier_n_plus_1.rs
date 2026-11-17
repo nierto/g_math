@@ -461,7 +461,7 @@ pub fn sincos_q512_512_native(x: I1024) -> (I1024, I1024) {
 
     // Range reduction: k = round(x * 2/π)
     let two_over_pi = I1024::from_words(TWO_OVER_PI_Q512);
-    // SIGNED Q512.512 multiply (mul_to_i2048 is unsigned — x can be negative)
+    // SIGNED Q512.512 multiply (mul_unsigned_to_i2048 is unsigned — x can be negative)
     let product = multiply_i1024_q512_512(x, two_over_pi);
 
     let half_q512 = I1024::from_i128(1) << 511;

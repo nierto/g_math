@@ -724,8 +724,26 @@ impl I1024 {
     /// **PRECISION**: Full 2048-bit result, no truncation
     /// **TIER N+1**: Enables error-less Q512.512 exp computation
     /// **CRITICAL**: Fixes 32/77 → 70+/77 decimal precision at Q256.256
+    ///
+    /// Signed and exact since 0.7.2 (it read both operands as unsigned
+    /// before: high half wrong whenever an operand was negative).
     #[inline(always)]
     pub fn mul_to_i2048(&self, other: I1024) -> crate::fixed_point::I2048 {
+        let mut p = self.mul_unsigned_to_i2048(other);
+        if self.is_negative() {
+            crate::fixed_point::domains::binary_fixed::i256::sub_from_high_words(&mut p.words, &other.words);
+        }
+        if other.is_negative() {
+            crate::fixed_point::domains::binary_fixed::i256::sub_from_high_words(&mut p.words, &self.words);
+        }
+        p
+    }
+
+    /// The product of the two bit patterns read as UNSIGNED 1024-bit numbers
+    /// (the body `mul_to_i2048` had before 0.7.2). Internal: callers pass
+    /// magnitudes or non-negative values.
+    #[inline(always)]
+    pub(crate) fn mul_unsigned_to_i2048(&self, other: I1024) -> crate::fixed_point::I2048 {
         use crate::fixed_point::I2048;
 
         let mut result = I2048::zero();
