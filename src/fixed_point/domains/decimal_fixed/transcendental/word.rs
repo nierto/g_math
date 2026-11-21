@@ -7,6 +7,7 @@
 #![allow(clippy::all, unused_braces)]
 
 use crate::fixed_point::domains::binary_fixed::i2048::i2048_div;
+use crate::fixed_point::domains::binary_fixed::word_div::POW10_RECIP;
 use crate::fixed_point::domains::symbolic::rational::rational_number::OverflowDetected;
 use crate::fixed_point::width::{Storage, WideInt};
 use crate::fixed_point::{I1024, I2048, I256, I512};
@@ -14,6 +15,49 @@ use crate::fixed_point::{I1024, I2048, I256, I512};
 use super::decimal_compute::*;
 #[allow(unused_imports)]
 use super::hp::*;
+
+/// `10^k` as little-endian words for every `k < T`, built at compile time:
+/// the decimal engines' scale factors, which `pow10_compute_ct` rebuilt by
+/// `k` wide multiplications on every call (77 of them per multiply at
+/// D = 37). Callers index only exponents whose power fits the signed word.
+const fn pow10_words<const W: usize, const T: usize>() -> [[u64; W]; T] {
+    let mut t = [[0u64; W]; T];
+    let mut cur = [0u64; W];
+    cur[0] = 1;
+    let mut k = 0;
+    while k < T {
+        t[k] = cur;
+        let mut carry: u128 = 0;
+        let mut i = 0;
+        while i < W {
+            let p = cur[i] as u128 * 10 + carry;
+            cur[i] = p as u64;
+            carry = p >> 64;
+            i += 1;
+        }
+        k += 1;
+    }
+    t
+}
+
+/// 10^0 ..= 10^38: every power of ten below i128::MAX.
+const POW10_I128: [i128; 39] = {
+    let mut t = [0i128; 39];
+    let mut k = 0;
+    let mut p = 1i128;
+    while k < 39 {
+        t[k] = p;
+        if k < 38 { p *= 10; }
+        k += 1;
+    }
+    t
+};
+/// 10^0 ..= 10^76 (10^77 exceeds I256::MAX).
+static POW10_I256: [[u64; 4]; 77] = pow10_words::<4, 77>();
+/// 10^0 ..= 10^153 (10^154 exceeds I512::MAX).
+static POW10_I512: [[u64; 8]; 154] = pow10_words::<8, 154>();
+/// 10^0 ..= 10^255: every u8 exponent fits I1024.
+static POW10_I1024: [[u64; 16]; 256] = pow10_words::<16, 256>();
 
 /// A multi-word integer whose limbs the high-precision helpers walk.
 pub trait HpWord: WideInt {
@@ -341,6 +385,9 @@ impl DecimalWord for i128 {
     }
     #[inline]
     fn pow10_compute_ct(exp: u8) -> i128 {
+        if (exp as usize) < POW10_I128.len() {
+            return POW10_I128[exp as usize];
+        }
         {
             let mut result: i128 = 1;
             for _ in 0..exp { result *= 10; }
@@ -553,6 +600,9 @@ impl DecimalWord for I256 {
     }
     #[inline]
     fn pow10_compute_ct(exp: u8) -> I256 {
+        if (exp as usize) < POW10_I256.len() {
+            return I256 { words: POW10_I256[exp as usize] };
+        }
         {
             let mut result = I256::from_i128(1);
             let ten = I256::from_i128(10);
@@ -775,6 +825,9 @@ impl DecimalWord for I512 {
     }
     #[inline]
     fn pow10_compute_ct(exp: u8) -> I512 {
+        if (exp as usize) < POW10_I512.len() {
+            return I512 { words: POW10_I512[exp as usize] };
+        }
         {
             let mut result = I512::from_i128(1);
             let ten = I512::from_i128(10);
@@ -814,13 +867,8 @@ impl DecimalWord for I512 {
             let mut left = Self::DP as u32;
             while left > 0 {
                 let k = left.min(19);
-                let d = 10u128.pow(k);
-                let mut rem: u128 = 0;
-                for word in m.words.iter_mut().rev() {
-                    let cur = (rem << 64) | *word as u128;
-                    *word = (cur / d) as u64;
-                    rem = cur % d;
-                }
+                // floor division by 10^k with its precomputed reciprocal
+                POW10_RECIP[k as usize].div_words(&mut m.words);
                 left -= k;
             }
             if negative { -m } else { m }
@@ -1016,12 +1064,7 @@ impl DecimalWord for I1024 {
     }
     #[inline]
     fn pow10_compute_ct(exp: u8) -> I1024 {
-        {
-            let mut result = I1024::from_i128(1);
-            let ten = I1024::from_i128(10);
-            for _ in 0..exp { result = result * ten; }
-            result
-        }
+        I1024 { words: POW10_I1024[exp as usize] }
     }
     #[inline]
     fn widen_to_wide(v: I1024) -> I2048 {
@@ -1055,13 +1098,8 @@ impl DecimalWord for I1024 {
             let mut left = Self::DP as u32;
             while left > 0 {
                 let k = left.min(19);
-                let d = 10u128.pow(k);
-                let mut rem: u128 = 0;
-                for word in m.words.iter_mut().rev() {
-                    let cur = (rem << 64) | *word as u128;
-                    *word = (cur / d) as u64;
-                    rem = cur % d;
-                }
+                // floor division by 10^k with its precomputed reciprocal
+                POW10_RECIP[k as usize].div_words(&mut m.words);
                 left -= k;
             }
             if negative { -m } else { m }
@@ -1286,3 +1324,28 @@ decimal_tier!(i128 => I256, true: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
 decimal_tier!(I256 => I512, true: 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
 decimal_tier!(I512 => I1024, true: 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38);
 decimal_tier!(I1024 => I1024, false: 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77);
+
+#[cfg(test)]
+mod pow10_table_tests {
+    use super::*;
+
+    /// The tables hold what the multiplication loops built, for every
+    /// exponent each word looks up.
+    #[test]
+    fn pow10_tables_equal_repeated_multiplication() {
+        let mut p = 1i128;
+        for k in 0..POW10_I128.len() {
+            assert_eq!(POW10_I128[k], p);
+            if k + 1 < POW10_I128.len() { p *= 10; }
+        }
+        let (mut a, mut b, mut c) = (I256::from_i128(1), I512::from_i128(1), I1024::from_i128(1));
+        for k in 0..256 {
+            if k < POW10_I256.len() { assert_eq!(I256 { words: POW10_I256[k] }, a, "10^{k} I256"); }
+            if k < POW10_I512.len() { assert_eq!(I512 { words: POW10_I512[k] }, b, "10^{k} I512"); }
+            assert_eq!(I1024 { words: POW10_I1024[k] }, c, "10^{k} I1024");
+            a = a * I256::from_i128(10);
+            b = b * I512::from_i128(10);
+            c = c * I1024::from_i128(10);
+        }
+    }
+}

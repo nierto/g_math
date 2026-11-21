@@ -538,17 +538,28 @@ impl I1024 {
         let self_abs = if self_neg { -self } else { self };
         let rhs_abs = if rhs_neg { -rhs } else { rhs };
 
-        // School multiplication algorithm (limited to avoid overflow)
+        // School multiplication modulo 2^1024 over the significant words
+        // only: a zero word contributes nothing, so stopping at the top
+        // significant word of `self` and carrying on through the remaining
+        // words gives the same result as the full 16 x 16 loop
+        let mut ns = 16;
+        while ns > 0 && self_abs.words[ns - 1] == 0 { ns -= 1; }
         for i in 0..16 {
             if rhs_abs.words[i] == 0 { continue; }
 
             let mut carry = 0u64;
-            for j in 0..16 {
-                if i + j >= 16 { break; }
-
+            let top = ns.min(16 - i);
+            for j in 0..top {
                 let prod = (self_abs.words[j] as u128) * (rhs_abs.words[i] as u128) + (carry as u128) + (result.words[i + j] as u128);
                 result.words[i + j] = prod as u64;
                 carry = (prod >> 64) as u64;
+            }
+            let mut k = i + top;
+            while carry != 0 && k < 16 {
+                let sum = result.words[k] as u128 + carry as u128;
+                result.words[k] = sum as u64;
+                carry = (sum >> 64) as u64;
+                k += 1;
             }
         }
 

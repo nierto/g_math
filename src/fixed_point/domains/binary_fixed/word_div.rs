@@ -9,10 +9,19 @@
 //! as the bit-at-a-time loop it replaces, in about one step per word instead
 //! of one per bit.
 //!
-//! The algorithm is written once as a macro over the word type, so the unit
-//! tests can run the identical code on 8-bit words, where every branch
-//! (including the add-back step, about 2 in 2^64 per quotient word at 64
-//! bits) is reached constantly and checked against native integers.
+//! Each quotient word is a two-word by one-word division by an invariant
+//! divisor, done with a precomputed reciprocal (Moller and Granlund,
+//! "Improved division by invariant integers", IEEE Trans. Computers 2011,
+//! algorithm 4): one multiply and two corrections instead of a software
+//! 128-by-64-bit division. The same reciprocal divides whole numbers by one
+//! word ([`Recip64::div_words`]), which the decimal engine uses to divide by
+//! powers of ten ([`POW10_RECIP`]).
+//!
+//! Both algorithms are written once as macros over the word type, so the
+//! unit tests run the identical code on 8-bit words: the reciprocal division
+//! exhaustively, and long division with every branch (including the
+//! add-back step, about 2 in 2^64 per quotient word at 64 bits) reached
+//! constantly, both checked against native integers.
 
 /// Most words any caller divides (I2048 and its decimal twins are 32).
 pub(crate) const MAX_WORDS: usize = 32;
@@ -20,8 +29,107 @@ pub(crate) const MAX_WORDS: usize = 32;
 #[cfg(test)]
 pub(crate) static ADD_BACKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+macro_rules! reciprocal_divisor {
+    ($name:ident, $w:ty, $dw:ty, $bits:expr) => {
+        /// A one-word divisor with its precomputed reciprocal.
+        #[derive(Clone, Copy, Debug)]
+        pub(crate) struct $name {
+            /// the divisor shifted left until its top bit is set
+            d: $w,
+            /// floor((B^2 - 1) / d) - B for the normalised d
+            v: $w,
+            /// the normalising shift
+            s: u32,
+        }
+
+        #[allow(dead_code)]
+        impl $name {
+            /// Panics if `d` is zero.
+            pub(crate) const fn new(d: $w) -> Self {
+                assert!(d != 0, "division by zero");
+                let s = d.leading_zeros();
+                let dn = d << s;
+                // in [B, 2B): the cast drops the leading B
+                let v = (<$dw>::MAX / dn as $dw) as $w;
+                $name { d: dn, v, s }
+            }
+
+            /// `(u1 * B + u0) / d` and its remainder for a NORMALISED
+            /// divisor (`s == 0`) and `u1 < d`.
+            #[inline(always)]
+            pub(crate) const fn div_2by1(&self, u1: $w, u0: $w) -> ($w, $w) {
+                let p = (self.v as $dw) * (u1 as $dw);
+                let p = p.wrapping_add(((u1 as $dw) << $bits) | u0 as $dw);
+                let mut q1 = ((p >> $bits) as $w).wrapping_add(1);
+                let q0 = p as $w;
+                let mut r = u0.wrapping_sub(q1.wrapping_mul(self.d));
+                if r > q0 {
+                    q1 = q1.wrapping_sub(1);
+                    r = r.wrapping_add(self.d);
+                }
+                if r >= self.d {
+                    q1 += 1;
+                    r -= self.d;
+                }
+                (q1, r)
+            }
+
+            /// Divide the little-endian words `w` in place; returns the
+            /// remainder. Leading zero words are skipped.
+            #[inline]
+            pub(crate) fn div_words(&self, w: &mut [$w]) -> $w {
+                let mut t = w.len();
+                while t > 0 && w[t - 1] == 0 {
+                    t -= 1;
+                }
+                if t == 0 {
+                    return 0;
+                }
+                let s = self.s;
+                if s == 0 {
+                    let mut r: $w = 0;
+                    for i in (0..t).rev() {
+                        let (q, rr) = self.div_2by1(r, w[i]);
+                        w[i] = q;
+                        r = rr;
+                    }
+                    r
+                } else {
+                    // divide w * 2^s by d * 2^s: the same quotient, the
+                    // remainder scaled by 2^s; the extra top word is below 2^s
+                    let mut r: $w = w[t - 1] >> ($bits - s);
+                    for i in (0..t).rev() {
+                        let low = if i > 0 { w[i - 1] >> ($bits - s) } else { 0 };
+                        let (q, rr) = self.div_2by1(r, (w[i] << s) | low);
+                        w[i] = q;
+                        r = rr;
+                    }
+                    r >> s
+                }
+            }
+        }
+    };
+}
+
+reciprocal_divisor!(Recip64, u64, u128, 64);
+#[cfg(test)]
+reciprocal_divisor!(Recip8, u8, u16, 8);
+
+/// `10^k` for `k <= 19` with their reciprocals, for dividing by powers of ten.
+pub(crate) const POW10_RECIP: [Recip64; 20] = {
+    let mut t = [Recip64::new(1); 20];
+    let mut k = 1;
+    let mut p = 1u64;
+    while k < 20 {
+        p *= 10;
+        t[k] = Recip64::new(p);
+        k += 1;
+    }
+    t
+};
+
 macro_rules! knuth_d {
-    ($name:ident, $short:ident, $w:ty, $dw:ty, $bits:expr) => {
+    ($name:ident, $recip:ident, $w:ty, $dw:ty, $bits:expr) => {
         /// `u = q * v + r` with `0 <= r < v` for unsigned words, little-endian.
         /// Writes the quotient into `q` (`q.len() == u.len()`) and the remainder
         /// into `r` (`r.len() == u.len()`). `v` must not be zero and
@@ -52,8 +160,8 @@ macro_rules! knuth_d {
                 return;
             }
             if n == 1 {
-                let rem = $short(&u[..m], v[0], &mut q[..m]);
-                r[0] = rem;
+                q[..m].copy_from_slice(&u[..m]);
+                r[0] = $recip::new(v[0]).div_words(&mut q[..m]);
                 return;
             }
             // normalise: the top divisor word gets its top bit set
@@ -76,15 +184,17 @@ macro_rules! knuth_d {
                 un[0] = u[0] << s;
             }
             let (vtop, vnext) = (vn[n - 1] as $dw, vn[n - 2] as $dw);
+            let vtop_recip = $recip::new(vn[n - 1]); // normalised: no shift
             for j in (0..=m - n).rev() {
                 // estimate from the top two remainder words; un[j + n] <= vtop
-                let num = ((un[j + n] as $dw) << $bits) | un[j + n - 1] as $dw;
                 let (mut qhat, mut rhat) = if un[j + n] as $dw >= vtop {
                     // the quotient word is at most B - 1
+                    let num = ((un[j + n] as $dw) << $bits) | un[j + n - 1] as $dw;
                     let qh = B - 1;
                     (qh, num - qh * vtop)
                 } else {
-                    (num / vtop, num % vtop)
+                    let (q, r) = vtop_recip.div_2by1(un[j + n], un[j + n - 1]);
+                    (q as $dw, r as $dw)
                 };
                 while rhat < B && qhat * vnext > ((rhat << $bits) | un[j + n - 2] as $dw) {
                     qhat -= 1;
@@ -130,26 +240,12 @@ macro_rules! knuth_d {
                 r[n - 1] = un[n - 1] >> s;
             }
         }
-
-        /// Division by one word: quotient into `q`, remainder returned.
-        #[allow(dead_code)]
-        #[inline]
-        pub(crate) fn $short(u: &[$w], d: $w, q: &mut [$w]) -> $w {
-            let d = d as $dw;
-            let mut rem: $dw = 0;
-            for i in (0..u.len()).rev() {
-                let cur = (rem << $bits) | u[i] as $dw;
-                q[i] = (cur / d) as $w;
-                rem = cur % d;
-            }
-            rem as $w
-        }
     };
 }
 
-knuth_d!(udivmod_slices, udivmod_short, u64, u128, 64);
+knuth_d!(udivmod_slices, Recip64, u64, u128, 64);
 #[cfg(test)]
-knuth_d!(udivmod_slices_u8, udivmod_short_u8, u8, u16, 8);
+knuth_d!(udivmod_slices_u8, Recip8, u8, u16, 8);
 
 /// Unsigned `(u / v, u % v)` on `N` words. Panics if `v` is zero.
 #[inline]
@@ -216,6 +312,58 @@ mod tests {
     }
     fn from_u8_words(w: &[u8]) -> u64 {
         w.iter().enumerate().fold(0u64, |acc, (i, &b)| acc | (b as u64) << (8 * i))
+    }
+
+    /// The reciprocal division on 8-bit words, exhaustively: every
+    /// normalised divisor and every two-word dividend with a high word below
+    /// it, and every divisor against every two-word number through
+    /// `div_words` (the shifted path included).
+    #[test]
+    fn reciprocal_division_on_8_bit_words_is_exact_everywhere() {
+        for d in 128u16..=255 {
+            let r8 = Recip8::new(d as u8);
+            for u1 in 0..d {
+                for u0 in 0u16..=255 {
+                    let n = u1 << 8 | u0;
+                    assert_eq!(r8.div_2by1(u1 as u8, u0 as u8), ((n / d) as u8, (n % d) as u8), "{n} / {d}");
+                }
+            }
+        }
+        for d in 1u32..=255 {
+            let r8 = Recip8::new(d as u8);
+            for n in 0u32..1 << 16 {
+                let mut w = [n as u8, (n >> 8) as u8];
+                let rem = r8.div_words(&mut w);
+                assert_eq!((w[0] as u32 | (w[1] as u32) << 8, rem as u32), (n / d, n % d), "{n} / {d}");
+            }
+        }
+    }
+
+    /// The 64-bit reciprocal division against u128 division, and the
+    /// powers-of-ten table against the powers.
+    #[test]
+    fn reciprocal_division_on_64_bit_words_matches_u128_division() {
+        let mut rng = Rng(0xA5A5_5A5A_0F0F_F0F0);
+        let mut divisors = vec![1u64, 2, 3, 7, 10, 1 << 63, (1 << 63) + 1, u64::MAX, u64::MAX - 1, 10_000_000_000_000_000_000];
+        for k in 0..20 {
+            assert_eq!(POW10_RECIP[k].d >> POW10_RECIP[k].s, 10u64.pow(k as u32));
+            divisors.push(10u64.pow(k as u32));
+        }
+        for _ in 0..2_000 {
+            divisors.push(rng.next() >> (rng.next() % 64));
+        }
+        for &d in &divisors {
+            let d = d.max(1);
+            let r = Recip64::new(d);
+            for _ in 0..200 {
+                let mut w = [rng.next() >> (rng.next() % 64), rng.next() >> (rng.next() % 64), 0, 0];
+                if rng.next() % 4 == 0 { w[1] = 0; }
+                let n = w[0] as u128 | (w[1] as u128) << 64;
+                let rem = r.div_words(&mut w);
+                assert_eq!((w[0] as u128 | (w[1] as u128) << 64, rem as u128), (n / d as u128, n % d as u128), "{n} / {d}");
+                assert_eq!((w[2], w[3]), (0, 0));
+            }
+        }
     }
 
     /// The algorithm on 8-bit words against native u64 division: every

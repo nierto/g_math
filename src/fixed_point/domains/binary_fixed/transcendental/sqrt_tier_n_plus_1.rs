@@ -97,6 +97,36 @@ pub(crate) fn find_msb_position_i1024(x: &I1024) -> Option<u32> {
 // TIER-NATIVE IMPLEMENTATIONS
 // ============================================================================
 
+/// `rounds` Newton steps `x <- (x + s / x) / 2` from `x`, returning exactly
+/// what all `rounds` steps return, but stopping as soon as the sequence
+/// repeats. Each step is a function of the previous value only, so a repeat
+/// fixes the rest: a fixed point (`next == x`) stays, and a two-cycle
+/// (`next == previous`, the floor root `r` alternating with `r + 1` when
+/// `s + 1` is a perfect square) ends on the value the parity of the remaining
+/// steps selects. Without a repeat all `rounds` steps run, as before.
+#[inline(always)]
+fn newton_rounds<T: Copy + PartialEq + core::ops::Add<Output = T> + core::ops::Div<Output = T>>(
+    s: T,
+    mut x: T,
+    rounds: u32,
+    half: impl Fn(T) -> T,
+) -> T {
+    let mut prev = x;
+    for k in 0..rounds {
+        let next = half(x + s / x);
+        if next == x {
+            return x;
+        }
+        if k > 0 && next == prev {
+            // period two from here: x_{k+1} = next, x_{k+2} = x, ...
+            return if (rounds - (k + 1)) % 2 == 0 { next } else { x };
+        }
+        prev = x;
+        x = next;
+    }
+    x
+}
+
 /// Q64.64 native square root (Tier 3 → computed at Tier 4 Q128.128)
 ///
 /// **INPUT**: i128 value in Q64.64 format (must be non-negative)
@@ -136,10 +166,8 @@ pub fn sqrt_q64_64_native(x: i128) -> i128 {
 
     // Newton-Raphson: x_{n+1} = (x_n + S_shifted / x_n) / 2
     // 7 iterations for 128-bit precision (quadratic convergence)
-    for _ in 0..7 {
-        let quotient = s_shifted / x_n;
-        x_n = (x_n + quotient) >> 1;
-    }
+    // (stops once the sequence repeats; same result as all 7 rounds)
+    x_n = newton_rounds(s_shifted, x_n, 7, |v: I256| v >> 1u32);
 
     // Result is in Q128.128-like scale (fractional bits = 64 from original + 64 from shift)
     // But we want Q64.64 output, so extract as i128
@@ -189,10 +217,8 @@ pub fn sqrt_q128_128_native(x: I256) -> I256 {
     let mut x_n = I512::from_i256(I256::from_i128(1)) << ((msb + 1) / 2) as usize;
 
     // Newton-Raphson: 9 iterations for 256-bit precision
-    for _ in 0..9 {
-        let quotient = s_shifted / x_n;
-        x_n = (x_n + quotient) >> 1;
-    }
+    // (stops once the sequence repeats; same result as all 9 rounds)
+    x_n = newton_rounds(s_shifted, x_n, 9, |v: I512| v >> 1usize);
 
     x_n.as_i256()
 }
@@ -235,10 +261,8 @@ pub fn sqrt_q256_256_native(x: I512) -> I512 {
     // Newton-Raphson: 12 iterations for 512-bit precision
     // Integer division truncation can slow quadratic convergence;
     // 12 iterations provides margin to achieve all 512 bits
-    for _ in 0..12 {
-        let quotient = s_shifted / x_n;
-        x_n = (x_n + quotient) >> 1;
-    }
+    // (stops once the sequence repeats; same result as all 12 rounds)
+    x_n = newton_rounds(s_shifted, x_n, 12, |v: I1024| v >> 1usize);
 
     x_n.as_i512()
 }
@@ -378,6 +402,44 @@ pub(crate) fn multiply_i1024_q512_512_signed(a: I1024, b: I1024) -> I1024 {
 mod tests {
     //! Each engine at its own format, in every build.
     use super::*;
+
+    /// The early stop returns what every round returns: against the plain
+    /// loop on u128 radicands built to end in a fixed point, in the two-cycle
+    /// (`s + 1` a perfect square), on perfect squares, and at random, for
+    /// every round count the engines use and the short counts where the
+    /// sequence has not settled yet.
+    #[test]
+    fn newton_rounds_equals_the_full_loop() {
+        fn full(s: u128, mut x: u128, rounds: u32) -> u128 {
+            for _ in 0..rounds {
+                x = (x + s / x) >> 1;
+            }
+            x
+        }
+        let mut state = 0x5EED_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut radicands: Vec<u128> = vec![1, 2, 3, 4, 8, 15, 16, 24, 35, 48, 99, 120, u64::MAX as u128, u128::MAX >> 1];
+        for _ in 0..20_000 {
+            let r = (next() as u128) >> (next() % 60);
+            radicands.push(r * r);           // perfect square
+            radicands.push(r * r + 2 * r);   // s + 1 = (r + 1)^2: the two-cycle
+            radicands.push((r * r).saturating_sub(1).max(1));
+            radicands.push(((next() as u128) << 60 | next() as u128) >> (next() % 120));
+        }
+        for &s in &radicands {
+            if s == 0 { continue; }
+            let msb = 127 - s.leading_zeros();
+            let seed = 1u128 << ((msb + 1) / 2);
+            for rounds in [0u32, 1, 2, 3, 4, 5, 7, 9, 12, 70] {
+                assert_eq!(newton_rounds(s, seed, rounds, |v| v >> 1), full(s, seed, rounds), "s = {s}, rounds = {rounds}");
+            }
+        }
+    }
 
     #[test]
     fn test_sqrt_zero() {

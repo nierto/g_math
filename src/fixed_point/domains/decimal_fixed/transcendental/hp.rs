@@ -7,6 +7,7 @@
 
 #[allow(unused_imports)]
 use super::word::{DecimalWord, HpWord};
+use crate::fixed_point::domains::binary_fixed::word_div::{Recip64, POW10_RECIP};
 #[allow(unused_imports)]
 use crate::fixed_point::width::WideInt;
 use super::decimal_compute::decimal_compute_neg;
@@ -67,13 +68,8 @@ pub(super) fn hp_mul_small<C: DecimalWord>(mut v: C::Hp, m: u64) -> C::Hp {
 
 /// `(v / d, v % d)` for `v >= 0`, `d > 0`.
 pub(super) fn hp_divmod_small<C: DecimalWord>(mut v: C::Hp, d: u64) -> (C::Hp, u64) {
-    let mut rem: u128 = 0;
-    for w in v.words_mut().iter_mut().rev() {
-        let cur = (rem << 64) | *w as u128;
-        *w = (cur / d as u128) as u64;
-        rem = cur % d as u128;
-    }
-    (v, rem as u64)
+    let rem = Recip64::new(d).div_words(v.words_mut());
+    (v, rem)
 }
 
 /// `v * 10^e` for `v >= 0`.
@@ -90,7 +86,8 @@ pub(super) fn hp_mul_pow10<C: DecimalWord>(mut v: C::Hp, mut e: u32) -> C::Hp {
 pub(super) fn hp_div_pow10<C: DecimalWord>(mut v: C::Hp, mut e: u32) -> C::Hp {
     while e > 0 {
         let k = e.min(19);
-        v = hp_divmod_small::<C>(v, 10u64.pow(k)).0;
+        // floor division by 10^k with its precomputed reciprocal
+        POW10_RECIP[k as usize].div_words(v.words_mut());
         e -= k;
     }
     v

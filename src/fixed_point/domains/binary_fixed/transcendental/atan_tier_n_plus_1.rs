@@ -52,17 +52,36 @@ use atan_trig_consts::*;
 /// division: the series coefficients 1/(2k+1). The wide `/` and `i2048_div`
 /// these replace are bit-serial (Q512.512 atan spent about 14 ms on its 210
 /// coefficients); the quotient is the same floor.
-fn recip_small<const N: usize>(frac: u32, n: u64) -> [u64; N] {
+const fn recip_small<const N: usize>(frac: u32, n: u64) -> [u64; N] {
     let mut num = [0u64; N];
     num[(frac / 64) as usize] = 1u64 << (frac % 64);
     let mut rem: u128 = 0;
-    for i in (0..N).rev() {
+    let mut i = N;
+    while i > 0 {
+        i -= 1;
         let cur = (rem << 64) | num[i] as u128;
         num[i] = (cur / n as u128) as u64;
         rem = cur % n as u128;
     }
     num
 }
+
+/// `recip_small(frac, 2k + 1)` for every `k < T`, evaluated at compile time:
+/// the series coefficients the atan loops used to divide out on every call
+/// (105 long divisions per Q128.128 atan). Entry 0 is unused.
+const fn atan_coefficients<const N: usize, const T: usize>(frac: u32) -> [[u64; N]; T] {
+    let mut t = [[0u64; N]; T];
+    let mut k = 1;
+    while k < T {
+        t[k] = recip_small::<N>(frac, (2 * k + 1) as u64);
+        k += 1;
+    }
+    t
+}
+
+static ATAN_COEFF_Q128: [[u64; 4]; 55] = atan_coefficients::<4, 55>(128);
+static ATAN_COEFF_Q256: [[u64; 8]; 105] = atan_coefficients::<8, 105>(256);
+static ATAN_COEFF_Q512: [[u64; 16]; 210] = atan_coefficients::<16, 210>(512);
 
 #[allow(dead_code)]
 pub fn atan_q64_64_native(x: i128) -> i128 {
@@ -257,10 +276,9 @@ pub(crate) fn atan_core_q128_128(x: I256) -> I256 {
     let mut result = I256::zero();
 
     for k in (1..num_terms).rev() {
-        let n = 2 * k + 1;
         // 1/n in Q128.128
         let coeff = {
-            I256::from_words(recip_small::<4>(128, n as u64))
+            I256::from_words(ATAN_COEFF_Q128[k])
         };
         let term = {
             let x_sq_wide = I512::from_i256(x_sq);
@@ -380,10 +398,9 @@ pub(crate) fn atan_core_q256_256(x: I512) -> I512 {
     let mut result = I512::zero();
 
     for k in (1..num_terms).rev() {
-        let n = 2 * k + 1;
         // 1/n in Q256.256
         let coeff = {
-            I512::from_words(recip_small::<8>(256, n as u64))
+            I512::from_words(ATAN_COEFF_Q256[k])
         };
         let term = {
             let x_sq_wide = I1024::from_i512(x_sq);
@@ -506,9 +523,8 @@ pub(crate) fn atan_core_q512_512(x: I1024) -> I1024 {
 
     for k in (1..num_terms).rev() {
         // Coefficient 1/(2k+1) computed inline
-        let n = (2 * k + 1) as i128;
         let coeff = {
-            I1024::from_words(recip_small::<16>(512, n as u64))
+            I1024::from_words(ATAN_COEFF_Q512[k])
         };
 
         // SIGNED multiply: result can be negative in Horner scheme
@@ -630,9 +646,8 @@ pub(crate) fn atan_core_q128_128_compute(x: I256) -> I256 {
     let mut result = I256::zero();
 
     for k in (1..num_terms).rev() {
-        let n = (2 * k + 1) as i128;
         let coeff = {
-            I256::from_words(recip_small::<4>(128, n as u64))
+            I256::from_words(ATAN_COEFF_Q128[k])
         };
         let term = {
             let x_sq_wide = I512::from_i256(x_sq);
@@ -742,9 +757,8 @@ pub(crate) fn atan_core_q256_256_compute(x: I512) -> I512 {
     let mut result = I512::zero();
 
     for k in (1..num_terms).rev() {
-        let n = (2 * k + 1) as i128;
         let coeff = {
-            I512::from_words(recip_small::<8>(256, n as u64))
+            I512::from_words(ATAN_COEFF_Q256[k])
         };
         let term = {
             let x_sq_wide = I1024::from_i512(x_sq);
@@ -800,3 +814,31 @@ pub fn atan2_q256_256_compute(y: I512, x: I512) -> I512 {
     if y > zero { pi_half } else { zero - pi_half }
 }
 
+#[cfg(test)]
+mod coefficient_table_tests {
+    use super::*;
+
+    /// The compile-time tables hold exactly what the per-call division
+    /// returned: floor(2^frac / (2k + 1)) for every k the loops use.
+    #[test]
+    fn atan_coefficient_tables_equal_the_division() {
+        fn check<const N: usize>(table: &[[u64; N]], frac: u32) {
+            for k in 1..table.len() {
+                let n = (2 * k + 1) as u64;
+                // long division of 2^frac by n, word by word, at run time
+                let mut num = [0u64; N];
+                num[(frac / 64) as usize] = 1u64 << (frac % 64);
+                let mut rem: u128 = 0;
+                for i in (0..N).rev() {
+                    let cur = (rem << 64) | num[i] as u128;
+                    num[i] = (cur / n as u128) as u64;
+                    rem = cur % n as u128;
+                }
+                assert_eq!(table[k], num, "1/{n} at {frac} bits");
+            }
+        }
+        check(&ATAN_COEFF_Q128, 128);
+        check(&ATAN_COEFF_Q256, 256);
+        check(&ATAN_COEFF_Q512, 512);
+    }
+}
