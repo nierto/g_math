@@ -5,6 +5,63 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] (0.7.3 candidate)
+
+Speed only: every function returns the same integers as 0.7.2, value for
+value, including its `Err` results and panics, except the division fixes
+listed under Fixed. Gate: `differential/tests/differential_072_validation.rs`
+links the published 0.7.2 beside this tree and compares about 1.6 million
+outcomes across `Fixed<i32, F>` splits, Q32.32 to Q256.256, `DecimalFixed<D>`
+for D = 0 to 38, the canonical pipeline, `g_math::wide`, the fused
+operations and the decompositions; none differ.
+
+### Changed
+
+- **Wide integer division is word at a time.** `I256`, `I512`, `I1024`,
+  `I2048`, `D256` and `D512` divided one quotient bit per step (1024 steps
+  for an `I1024`). They now share Knuth's Algorithm D on 64-bit words with a
+  precomputed-reciprocal quotient estimate (`binary_fixed/word_div.rs`), and
+  quotient and remainder come from one division. On an i7-7700: `I512 /`
+  1.7 us to 0.14 us, `I1024 /` 8.2 us to 0.30 us.
+- **Square-root engines stop once their Newton sequence repeats.** The
+  result is the one the full fixed count of rounds returns, for every input.
+- **Constants are built at compile time:** the atan series coefficients
+  (105 long divisions per Q128.128 call before) and the decimal engine's
+  powers of ten (10^77 was rebuilt by 77 wide multiplications on every
+  multiply at 37 digits).
+- **The decimal engine divides by powers of ten with precomputed
+  reciprocals** and skips leading zero words; `I1024` multiplication skips
+  zero words.
+- **`fused::softmax_mix*` on the i32 formats** forms the value mix with AVX2
+  (signed 32 x 32-bit products and an exact offset in place of the 64-bit
+  arithmetic shift AVX2 lacks), scalar elsewhere.
+
+Measured on an i7-7700 against 0.7.2: Q128.128 `acos` 147 us to about 6 us,
+`ln` 9.2 us to 1.7 us, `/` 2.4 us to 0.13 us; `DecimalFixed<37>` `exp`
+31 us to 6.0 us, `ln` 117 us to 13 us, `cos` 103 us to 13 us, `atan`
+221 us to 15 us, `acos` 303 us to 17 us; the canonical pipeline on
+37-digit decimal literals 3 to 15 times faster; `softmax_mix_flat_values`
+at 1024 positions 11 to 16 percent faster.
+
+### Added
+
+- **`fused::dot_many_scaled` and `fused::dot_many_scaled_into`**: the
+  attention score form `q . k * scale` in one call, equal to `dot_many`
+  followed by `*` for every input (both roundings kept, all dots formed
+  before any product, so the same panics).
+
+### Fixed
+
+- **`I1024` division of `I1024::MIN`** returned quotient 0 and remainder
+  `MIN` for every divisor.
+- **`i128::MIN / -1` on the wide types** panicked in the `i128` shortcut,
+  although `2^127` fits every wide type.
+- **`MIN / -1` of a wide type itself** now panics as native integers do;
+  `I256`, `I512`, `D256` and `D512` returned `MIN`.
+
+Gate: `tests/wide_division_validation.rs` compares every public division
+entry point of the six types with BigInt.
+
 ## [0.7.2] - 2026-11-17
 
 ### Fixed

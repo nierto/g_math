@@ -806,6 +806,41 @@ where
     out
 }
 
+/// [`dot_many`] with every result then multiplied by `scale`: element `k` is
+/// `dot_many(query, keys_flat, dim)[k] * scale`, both roundings kept (the
+/// dot rounded to storage, then the product rounded to nearest, ties toward
+/// +infinity, as the `*` operator rounds). The attention score form
+/// `q . k / sqrt(d)` in one call, with no second result vector.
+///
+/// # Panics
+/// As [`dot_many`], and where a product leaves the storage range (as `*`
+/// panics). All dots are formed before any product, as in the two-step form.
+pub fn dot_many_scaled<S: Storage, const F: u32>(query: &[Fixed<S, F>], keys_flat: &[Fixed<S, F>], dim: usize, scale: Fixed<S, F>) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = dot_many(query, keys_flat, dim);
+    for o in out.iter_mut() {
+        *o = *o * scale;
+    }
+    out
+}
+
+/// [`dot_many_scaled`] writing into a caller-provided slice. The same values;
+/// nothing is allocated.
+///
+/// # Panics
+/// As [`dot_many_into`], and where a product leaves the storage range.
+pub fn dot_many_scaled_into<S: Storage, const F: u32>(query: &[Fixed<S, F>], keys_flat: &[Fixed<S, F>], dim: usize, scale: Fixed<S, F>, out: &mut [Fixed<S, F>])
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    dot_many_into(query, keys_flat, dim, out);
+    for o in out.iter_mut() {
+        *o = *o * scale;
+    }
+}
+
 /// [`dot_many`] writing into a caller-provided slice: `out[k]` is the dot of
 /// the query with key `k`. The same values; nothing is allocated.
 ///

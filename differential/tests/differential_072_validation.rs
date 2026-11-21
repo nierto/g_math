@@ -490,3 +490,89 @@ vector_gate!(fused_linalg_q64_64_same_as_0_7_2, 128, 64, old::fixed_point::Q64_6
 vector_gate!(fused_linalg_q128_128_same_as_0_7_2, 256, 128, old::fixed_point::Q128_128, new::fixed_point::Q128_128,
     |w: &Vec<u64>| old::fixed_point::Q128_128::from_raw(old::fixed_point::I256 { words: w[..].try_into().unwrap() }),
     |w: &Vec<u64>| new::fixed_point::Q128_128::from_raw(new::fixed_point::I256 { words: w[..].try_into().unwrap() }));
+
+// ---- softmax value mix at attention sizes (0.7.3: AVX2 numerators) -----------------
+
+macro_rules! mix_gate {
+    ($test:ident, [$($f:literal),+]) => {
+        #[test]
+        fn $test() {
+            silence_panics();
+            let mut t = Tally::new(stringify!($test));
+            $({
+                type O = old::fixed_point::Fixed<i32, $f>;
+                type N = new::fixed_point::Fixed<i32, $f>;
+                let mut rng = Rng(0x313 ^ $f);
+                for &dim in &[1usize, 7, 8, 9, 15, 16, 64, 128, 130, 256] {
+                    for &n in &[1usize, 2, 5, 33, 257, 1024] {
+                        if dim * n > 140_000 { continue; }
+                        for kind in 0..3u64 {
+                            // scores near the max (many weights), spread, or wide; values small, model-like, or full range
+                            let score_bits: u32 = [$f + 2, $f + 5, 30][kind as usize];
+                            let value_bits: u32 = [$f + 3, $f + 6, 31][((kind + rng.below(3)) % 3) as usize];
+                            let s: Vec<i32> = (0..n).map(|_| (raw_words(&mut rng, 32, score_bits.min(31))[0]) as i32).collect();
+                            let v: Vec<i32> = (0..n * dim).map(|_| (raw_words(&mut rng, 32, value_bits.min(31))[0]) as i32).collect();
+                            let (so, sn): (Vec<O>, Vec<N>) = (s.iter().map(|&r| O::from_raw(r)).collect(), s.iter().map(|&r| N::from_raw(r)).collect());
+                            let (vo, vn): (Vec<O>, Vec<N>) = (v.iter().map(|&r| O::from_raw(r)).collect(), v.iter().map(|&r| N::from_raw(r)).collect());
+                            let input = (stringify!($f), dim, n, kind);
+                            t.same("softmax_mix_flat_values", &input,
+                                run(|| old::fixed_point::imperative::fused::softmax_mix_flat_values(&so, &vo, dim)),
+                                run(|| new::fixed_point::imperative::fused::softmax_mix_flat_values(&sn, &vn, dim)));
+                            t.same("softmax_mix_flat", &input,
+                                run(|| old::fixed_point::imperative::fused::softmax_mix_flat(&so, &vo, dim)),
+                                run(|| new::fixed_point::imperative::fused::softmax_mix_flat(&sn, &vn, dim)));
+                            let (ro, rn): (Vec<&[O]>, Vec<&[N]>) = (vo.chunks(dim).collect(), vn.chunks(dim).collect());
+                            t.same("softmax_mix_values", &input,
+                                run(|| old::fixed_point::imperative::fused::softmax_mix_values(&so, &ro)),
+                                run(|| new::fixed_point::imperative::fused::softmax_mix_values(&sn, &rn)));
+                        }
+                    }
+                }
+            })+
+            t.finish();
+        }
+    };
+}
+
+mix_gate!(softmax_mix_i32_splits_same_as_0_7_2, [2, 4, 8, 10, 12, 15, 16]);
+
+// ---- 0.7.3 dot_many_scaled: the consumer's two-step form on 0.7.2 ---------------------
+
+macro_rules! scaled_gate {
+    ($test:ident, $bits:expr, $f:expr, $old:ty, $new:ty, $mk_old:expr, $mk_new:expr) => {
+        #[test]
+        fn $test() {
+            silence_panics();
+            let (mk_old, mk_new) = ($mk_old, $mk_new);
+            let mut t = Tally::new(stringify!($test));
+            let mut rng = Rng(0x5CA1E ^ $f as u64);
+            for case in 0..600usize {
+                let dim = [1usize, 3, 8, 31, 64, 128, 256][case % 7];
+                let keys = 1 + rng.below(70) as usize;
+                let mag = if case % 5 == 0 { $f + 12 } else { $f + 3 };
+                let q: Vec<Vec<u64>> = (0..dim).map(|_| raw_words(&mut rng, $bits, mag)).collect();
+                let k: Vec<Vec<u64>> = (0..dim * keys).map(|_| raw_words(&mut rng, $bits, mag)).collect();
+                let s = raw_words(&mut rng, $bits, if case % 7 == 0 { $f + 8 } else { $f });
+                let (qo, qn): (Vec<$old>, Vec<$new>) = (q.iter().map(|w| mk_old(w)).collect(), q.iter().map(|w| mk_new(w)).collect());
+                let (ko, kn): (Vec<$old>, Vec<$new>) = (k.iter().map(|w| mk_old(w)).collect(), k.iter().map(|w| mk_new(w)).collect());
+                let (so, sn) = (mk_old(&s), mk_new(&s));
+                let input = (dim, keys, &s);
+                let two_step = run(|| old::fixed_point::imperative::fused::dot_many(&qo, &ko, dim).into_iter().map(|x| x * so).collect::<Vec<_>>());
+                t.same("dot_many_scaled", &input, two_step.clone(), run(|| new::fixed_point::imperative::fused::dot_many_scaled(&qn, &kn, dim, sn)));
+                t.same("dot_many_scaled_into", &input, two_step, run(|| {
+                    let mut out = vec![mk_new(&vec![0u64; ($bits as usize + 63) / 64]); keys];
+                    new::fixed_point::imperative::fused::dot_many_scaled_into(&qn, &kn, dim, sn, &mut out);
+                    out
+                }));
+            }
+            t.finish();
+        }
+    };
+}
+
+scaled_gate!(dot_many_scaled_i32_10_equals_two_steps_on_0_7_2, 32, 10, old::fixed_point::Fixed<i32, 10>, new::fixed_point::Fixed<i32, 10>,
+    |w: &Vec<u64>| old::fixed_point::Fixed::<i32, 10>::from_raw(w_i32(w)), |w: &Vec<u64>| new::fixed_point::Fixed::<i32, 10>::from_raw(w_i32(w)));
+scaled_gate!(dot_many_scaled_i32_16_equals_two_steps_on_0_7_2, 32, 16, old::fixed_point::Fixed<i32, 16>, new::fixed_point::Fixed<i32, 16>,
+    |w: &Vec<u64>| old::fixed_point::Fixed::<i32, 16>::from_raw(w_i32(w)), |w: &Vec<u64>| new::fixed_point::Fixed::<i32, 16>::from_raw(w_i32(w)));
+scaled_gate!(dot_many_scaled_q64_64_equals_two_steps_on_0_7_2, 128, 64, old::fixed_point::Q64_64, new::fixed_point::Q64_64,
+    |w: &Vec<u64>| old::fixed_point::Q64_64::from_raw(w_i128(w)), |w: &Vec<u64>| new::fixed_point::Q64_64::from_raw(w_i128(w)));

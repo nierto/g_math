@@ -379,6 +379,30 @@ impl Storage for i32 {
         if F > 15 || exps.len() > 1usize << (31 - F) {
             return false;
         }
+        #[cfg(target_arch = "x86_64")]
+        if std::is_x86_feature_detected!("avx2") {
+            // every position adds 2^(62 - F) to each numerator (see
+            // mix_row_offset_avx2); the sum of the offsets is removed once
+            use crate::fixed_point::imperative::linalg::{mix_row_offset_avx2, mix_rows4_offset_avx2};
+            let dim = num.len();
+            let mut j = 0;
+            while j + 4 <= exps.len() {
+                let e = [exps[j], exps[j + 1], exps[j + 2], exps[j + 3]];
+                let v = [&row(j)[..dim], &row(j + 1)[..dim], &row(j + 2)[..dim], &row(j + 3)[..dim]];
+                // SAFETY: AVX2 was just detected; rows have num.len() values.
+                unsafe { mix_rows4_offset_avx2(e, v, num, F) };
+                j += 4;
+            }
+            for j in j..exps.len() {
+                // SAFETY: as above
+                unsafe { mix_row_offset_avx2(exps[j], &row(j)[..dim], num, F) };
+            }
+            let offsets = (exps.len() as i64).wrapping_mul(1i64 << (62 - F));
+            for n in num.iter_mut() {
+                *n = n.wrapping_sub(offsets);
+            }
+            return true;
+        }
         let round = 1i64 << (F - 1);
         for (j, &e) in exps.iter().enumerate() {
             let v = row(j);

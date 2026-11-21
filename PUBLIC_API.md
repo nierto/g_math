@@ -383,6 +383,8 @@ Modules: g_math::fixed_point::imperative::fused
 | `sigmoid_mul_in_place` | fn | [`sigmoid_mul`] in place: `x[i] *= sigmoid(gate[i])`. |
 | `entropy` | fn | Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the wide tier and the sum rounded to storage once. |
 | `dot_many` | fn | One query against many keys stored in one contiguous buffer: element `k` of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each accumulated at the compute tier and rounded to storage once, exactly as [`dot`] and `FixedVector::<Fixed<S, F>>::dot` round. |
+| `dot_many_scaled` | fn | [`dot_many`] with every result then multiplied by `scale`: element `k` is `dot_many(query, keys_flat, dim)[k] * scale`, both roundings kept (the dot rounded to storage, then the product rounded to nearest, ties toward +infinity, as the `*` operator rounds). |
+| `dot_many_scaled_into` | fn | [`dot_many_scaled`] writing into a caller-provided slice. |
 | `dot_many_into` | fn | [`dot_many`] writing into a caller-provided slice: `out[k]` is the dot of the query with key `k`. |
 | `rms_norm` | fn | RMS normalisation with a learned scale: `out[i] = x[i] * weight[i] / sqrt(mean(x^2) + eps)`, each element rounded once (`eps` in Q64.64). |
 | `rms_norm_in_place` | fn | [`rms_norm`] in place. |

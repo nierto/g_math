@@ -43,6 +43,7 @@ let (mixed, observer_weights) = fused::softmax_mix(&scores, &values).unwrap();
 | `softmax_mix(&scores, &values)` | softmax(scores) · V, weights never materialized to storage |
 | `softmax_mix_values`, `softmax_mix_flat`, `softmax_mix_flat_values` | the same mix without the observer weights, and/or with the value rows in one contiguous buffer (0.6.5) |
 | `dot_many(&query, &keys_flat, dim)` | one query against many keys in one buffer, each rounded as `dot` rounds (0.6.5) |
+| `dot_many_scaled(&query, &keys_flat, dim, scale)` | `dot_many` with every result then multiplied by `scale` (`q . k / sqrt(d)` scores), equal to `dot_many` followed by `*`, panics included; `dot_many_scaled_into` writes into a caller slice (0.7.3) |
 | `rms_norm(&x, &weight, eps_q64)`, `rms_norm_in_place` | `x[i] * weight[i] / sqrt(mean(x²)+ε)`, each output rounded ONCE from the exact product with a full-precision reciprocal root; not the same as multiplying by the stored factor below (0.6.5) |
 | `rms_norm_factor(&x, eps)` | 1/√(mean(x²)+ε), ε a storage value |
 | `rms_norm_factor_eps_wide(&x, eps_q64)` | the same with ε in Q64.64, added at the compute tier (0.6.4) |
