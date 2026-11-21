@@ -202,10 +202,10 @@ macro_rules! word_wide_int {
         }
     };
 }
-#[inline] fn divmod_by_ops<T: std::ops::Div<Output = T> + std::ops::Rem<Output = T> + Copy>(a: T, d: T) -> (T, T) { (a / d, a % d) }
-word_wide_int!(I256, 256, u32, divmod_by_ops);
-word_wide_int!(I512, 512, usize, divmod_by_ops);
-word_wide_int!(I1024, 1024, usize, divmod_by_ops);
+// one division each for quotient and remainder
+word_wide_int!(I256, 256, u32, crate::fixed_point::domains::binary_fixed::i256::divmod_i256_by_i256);
+word_wide_int!(I512, 512, usize, crate::fixed_point::domains::binary_fixed::i512::divmod_i512_by_i512);
+word_wide_int!(I1024, 1024, usize, crate::fixed_point::domains::binary_fixed::i1024::divmod_i1024);
 word_wide_int!(I2048, 2048, usize, crate::fixed_point::domains::binary_fixed::i2048::i2048_divmod);
 
 /// A word a fixed-point value is stored in, with the wider words that belong

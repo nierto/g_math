@@ -18,6 +18,7 @@ pub mod i256;
 pub mod i512;
 pub mod i1024;
 pub mod i2048;
+pub(crate) mod word_div;
 
 // Re-export core binary multiplication (AVX2-accelerated with scalar fallback)
 pub use binary_multiplication::{

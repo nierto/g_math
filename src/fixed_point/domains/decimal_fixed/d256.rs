@@ -381,119 +381,18 @@ pub fn divmod_d256_by_d256(dividend: D256, divisor: D256) -> (D256, D256) {
     if dividend.fits_in_i128() && divisor.fits_in_i128() {
         let dividend_i128 = dividend.as_i128();
         let divisor_i128 = divisor.as_i128();
-        let quotient = dividend_i128 / divisor_i128;
-        let remainder = dividend_i128 % divisor_i128;
-        return (D256::from_i128(quotient), D256::from_i128(remainder));
-    }
-
-    // Determine signs for proper signed division
-    let dividend_negative = dividend.is_negative();
-    let divisor_negative = divisor.is_negative();
-    let quotient_negative = dividend_negative != divisor_negative;
-
-    // Work with absolute values
-    let abs_dividend = if dividend_negative {
-        negate_d256(dividend)
-    } else {
-        dividend
-    };
-
-    let abs_divisor = if divisor_negative {
-        negate_d256(divisor)
-    } else {
-        divisor
-    };
-
-    // PRODUCTION: 256-bit by 256-bit long division algorithm
-    // This implements the standard long division algorithm word-by-word
-    let mut quotient_words = [0u64; 4];
-    let mut remainder = D256::zero();
-
-    // Process each bit from most significant to least significant
-    for word_idx in (0..4).rev() {
-        for bit_idx in (0..64).rev() {
-            // Shift remainder left by 1
-            remainder = shift_left_d256_by_1(remainder);
-
-            // Set the least significant bit to the current dividend bit
-            let dividend_bit = (abs_dividend.words[word_idx] >> bit_idx) & 1;
-            remainder.words[0] |= dividend_bit;
-
-            // Try to subtract divisor from remainder
-            if compare_d256_unsigned(remainder, abs_divisor) >= 0 {
-                remainder = subtract_d256_unsigned(remainder, abs_divisor);
-                // Set the corresponding quotient bit
-                quotient_words[word_idx] |= 1u64 << bit_idx;
-            }
+        // i128::MIN / -1 = 2^127 fits D256 but overflows i128
+        if !(dividend_i128 == i128::MIN && divisor_i128 == -1) {
+            let quotient = dividend_i128 / divisor_i128;
+            let remainder = dividend_i128 % divisor_i128;
+            return (D256::from_i128(quotient), D256::from_i128(remainder));
         }
     }
 
-    let mut quotient = D256 { words: quotient_words };
-
-    // Apply signs
-    if quotient_negative && !is_d256_zero(quotient) {
-        quotient = negate_d256(quotient);
-    }
-
-    if dividend_negative && !is_d256_zero(remainder) {
-        remainder = negate_d256(remainder);
-    }
-
-    (quotient, remainder)
-}
-
-/// Helper: Shift D256 left by 1 bit (for long division algorithm)
-#[inline(always)]
-fn shift_left_d256_by_1(value: D256) -> D256 {
-    let mut result = [0u64; 4];
-    let mut carry = 0u64;
-
-    for i in 0..4 {
-        let word = value.words[i];
-        result[i] = (word << 1) | carry;
-        carry = word >> 63;
-    }
-
-    D256 { words: result }
-}
-
-/// Helper: Compare two D256 values as unsigned (for long division)
-#[inline(always)]
-fn compare_d256_unsigned(a: D256, b: D256) -> i8 {
-    for i in (0..4).rev() {
-        if a.words[i] > b.words[i] {
-            return 1;
-        } else if a.words[i] < b.words[i] {
-            return -1;
-        }
-    }
-    0 // Equal
-}
-
-/// Helper: Subtract b from a (unsigned, for long division)
-#[inline(always)]
-fn subtract_d256_unsigned(a: D256, b: D256) -> D256 {
-    let mut result = [0u64; 4];
-    let mut borrow = 0i128;
-
-    for i in 0..4 {
-        let diff = (a.words[i] as i128) - (b.words[i] as i128) - borrow;
-        if diff < 0 {
-            result[i] = (diff + (1i128 << 64)) as u64;
-            borrow = 1;
-        } else {
-            result[i] = diff as u64;
-            borrow = 0;
-        }
-    }
-
-    D256 { words: result }
-}
-
-/// Helper: Check if D256 is zero
-#[inline(always)]
-fn is_d256_zero(value: D256) -> bool {
-    value.words[0] == 0 && value.words[1] == 0 && value.words[2] == 0 && value.words[3] == 0
+    // word-at-a-time long division; same quotient and remainder as the
+    // bit-at-a-time loop it replaced (both are unique)
+    let (q, r) = crate::fixed_point::domains::binary_fixed::word_div::divmod_signed(dividend.words, divisor.words);
+    (D256 { words: q }, D256 { words: r })
 }
 
 // Type aliases for domain clarity

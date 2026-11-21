@@ -766,152 +766,22 @@ pub fn divmod_i512_by_i512(dividend: I512, divisor: I512) -> (I512, I512) {
     // a saturated quotient, a plausible value)
     assert!(!divisor.is_zero(), "I512: division by zero");
 
-    // Optimize for cases where both fit in i128 (common for small values)
+    // Optimize for cases where both fit in i128 (i128::MIN / -1 = 2^127
+    // fits I512 but overflows i128: it takes the general path)
     if dividend.fits_in_i128() && divisor.fits_in_i128() {
         let dividend_i128 = dividend.as_i128();
         let divisor_i128 = divisor.as_i128();
-        let quotient = dividend_i128 / divisor_i128;
-        let remainder = dividend_i128 % divisor_i128;
-        return (I512::from_i128(quotient), I512::from_i128(remainder));
-    }
-
-    // Optimize for cases where both fit in I256
-    if dividend.fits_in_i256() && divisor.fits_in_i256() {
-        let dividend_i256 = dividend.as_i256();
-        let divisor_i256 = divisor.as_i256();
-        let (quot, rem) = crate::fixed_point::i256::divmod_i256_by_i256(dividend_i256, divisor_i256);
-        return (I512::from_i256(quot), I512::from_i256(rem));
-    }
-
-    // Determine signs for proper signed division
-    let dividend_negative = dividend.is_negative();
-    let divisor_negative = divisor.is_negative();
-    let quotient_negative = dividend_negative != divisor_negative;
-
-    // Work with absolute values
-    let abs_dividend = if dividend_negative {
-        negate_i512(dividend)
-    } else {
-        dividend
-    };
-
-    let abs_divisor = if divisor_negative {
-        negate_i512(divisor)
-    } else {
-        divisor
-    };
-
-    // PRODUCTION: 512-bit by 512-bit long division algorithm
-    // Binary long division - processes each bit from MSB to LSB
-    let mut quotient_words = [0u64; 8];
-    let mut remainder = I512::zero();
-
-    // Process each bit from most significant to least significant
-    for word_idx in (0..8).rev() {
-        for bit_idx in (0..64).rev() {
-            // Shift remainder left by 1
-            remainder = shift_left_i512_by_1(remainder);
-
-            // Set the least significant bit to the current dividend bit
-            let dividend_bit = (abs_dividend.words[word_idx] >> bit_idx) & 1;
-            remainder.words[0] |= dividend_bit;
-
-            // Try to subtract divisor from remainder
-            if compare_i512_unsigned(remainder, abs_divisor) >= 0 {
-                remainder = subtract_i512_unsigned(remainder, abs_divisor);
-                // Set the corresponding quotient bit
-                quotient_words[word_idx] |= 1u64 << bit_idx;
-            }
+        if !(dividend_i128 == i128::MIN && divisor_i128 == -1) {
+            let quotient = dividend_i128 / divisor_i128;
+            let remainder = dividend_i128 % divisor_i128;
+            return (I512::from_i128(quotient), I512::from_i128(remainder));
         }
     }
 
-    let mut quotient = I512 { words: quotient_words };
-
-    // Apply signs
-    if quotient_negative && !quotient.is_zero() {
-        quotient = negate_i512(quotient);
-    }
-
-    if dividend_negative && !remainder.is_zero() {
-        remainder = negate_i512(remainder);
-    }
-
-    (quotient, remainder)
-}
-
-/// Helper: Negate I512 value (two's complement)
-///
-/// ALGORITHM: Bitwise NOT + 1 (standard two's complement negation)
-/// PRECISION: Exact for all values except I512::min_value() (overflow wraps)
-#[inline(always)]
-fn negate_i512(value: I512) -> I512 {
-    let mut result = [0u64; 8];
-    let mut carry = 1u64;
-
-    for i in 0..8 {
-        let (val, c) = (!value.words[i]).overflowing_add(carry);
-        result[i] = val;
-        carry = c as u64;
-    }
-
-    I512 { words: result }
-}
-
-/// Helper: Shift I512 left by exactly 1 bit
-///
-/// ALGORITHM: Propagate carry bit from each word to the next
-/// USAGE: Required for binary long division algorithm
-#[inline(always)]
-fn shift_left_i512_by_1(value: I512) -> I512 {
-    let mut result = [0u64; 8];
-    let mut carry = 0u64;
-
-    for i in 0..8 {
-        let word = value.words[i];
-        result[i] = (word << 1) | carry;
-        carry = word >> 63;  // Extract MSB as carry to next word
-    }
-
-    I512 { words: result }
-}
-
-/// Helper: Compare two I512 values as unsigned (for long division)
-///
-/// ALGORITHM: Lexicographic comparison from MSB to LSB
-/// RETURNS: 1 if a > b, -1 if a < b, 0 if a == b
-#[inline(always)]
-fn compare_i512_unsigned(a: I512, b: I512) -> i8 {
-    for i in (0..8).rev() {
-        if a.words[i] > b.words[i] {
-            return 1;
-        } else if a.words[i] < b.words[i] {
-            return -1;
-        }
-    }
-    0 // Equal
-}
-
-/// Helper: Subtract b from a (unsigned, for long division)
-///
-/// ALGORITHM: Word-by-word subtraction with borrow propagation
-/// PRECONDITION: a >= b (ensured by compare_i512_unsigned check in caller)
-#[inline(always)]
-fn subtract_i512_unsigned(a: I512, b: I512) -> I512 {
-    let mut result = [0u64; 8];
-    let mut borrow = 0i128;
-
-    for i in 0..8 {
-        let diff = (a.words[i] as i128) - (b.words[i] as i128) - borrow;
-        if diff < 0 {
-            result[i] = (diff + (1i128 << 64)) as u64;
-            borrow = 1;
-        } else {
-            result[i] = diff as u64;
-            borrow = 0;
-        }
-    }
-
-    I512 { words: result }
+    // word-at-a-time long division; same quotient and remainder as the
+    // bit-at-a-time loop it replaced (both are unique)
+    let (q, r) = super::word_div::divmod_signed(dividend.words, divisor.words);
+    (I512 { words: q }, I512 { words: r })
 }
 
 #[cfg(test)]

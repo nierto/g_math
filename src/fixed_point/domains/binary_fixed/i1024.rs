@@ -464,65 +464,42 @@ impl BitAnd for I1024 {
 impl Div for I1024 {
     type Output = Self;
 
-    /// Division for I1024
-    ///
-    /// ALGORITHM: Long division with shift-and-subtract method
-    /// PRECISION: Full 1024-bit precision division
-    /// CRITICAL: Required for Q256.256 fixed-point division (tier N+1 strategy)
+    /// Division for I1024, truncated toward zero (as Rust's `/`).
     #[inline(always)]
     fn div(self, rhs: Self) -> Self {
-        // like integer division: a zero divisor panics (before 0.6.4 it
-        // returned a saturated quotient, a plausible value)
-        assert!(rhs != I1024::zero(), "I1024: division by zero");
-
-        // Optimize for smaller values
-        if self.fits_in_i128() && rhs.fits_in_i128() {
-            let dividend = self.as_i128();
-            let divisor = rhs.as_i128();
-            return I1024::from_i128(dividend / divisor);
-        }
-
-        if self.fits_in_i512() && rhs.fits_in_i512() {
-            let dividend = self.as_i512();
-            let divisor = rhs.as_i512();
-            return I1024::from_i512(dividend / divisor);
-        }
-
-        // Full 1024-bit division
-        let (quotient, _remainder) = self.div_rem_unsigned(rhs);
-        quotient
+        divmod_i1024(self, rhs).0
     }
 }
 
 impl Rem for I1024 {
     type Output = Self;
 
-    /// Remainder (modulo) for I1024
-    ///
-    /// ALGORITHM: Uses div_rem_unsigned for full precision
-    /// PRECISION: Full 1024-bit precision remainder
+    /// Remainder for I1024, with the dividend's sign (as Rust's `%`).
     #[inline(always)]
     fn rem(self, rhs: Self) -> Self {
-        // like integer remainder: a zero divisor panics (0.6.3 returned 0)
-        assert!(rhs != I1024::zero(), "I1024: division by zero");
-
-        // Optimize for smaller values
-        if self.fits_in_i128() && rhs.fits_in_i128() {
-            let dividend = self.as_i128();
-            let divisor = rhs.as_i128();
-            return I1024::from_i128(dividend % divisor);
-        }
-
-        if self.fits_in_i512() && rhs.fits_in_i512() {
-            let dividend = self.as_i512();
-            let divisor = rhs.as_i512();
-            return I1024::from_i512(dividend % divisor);
-        }
-
-        // Full 1024-bit remainder
-        let (_quotient, remainder) = self.div_rem_unsigned(rhs);
-        remainder
+        divmod_i1024(self, rhs).1
     }
+}
+
+/// `(a / b, a % b)` for I1024 in one division: quotient truncated toward
+/// zero, remainder with the dividend's sign.
+///
+/// # Panics
+/// Panics on a zero divisor (before 0.6.4 a saturated quotient or 0 was
+/// returned) and on the overflowing `MIN / -1`.
+pub fn divmod_i1024(a: I1024, b: I1024) -> (I1024, I1024) {
+    assert!(b != I1024::zero(), "I1024: division by zero");
+    if a.fits_in_i128() && b.fits_in_i128() {
+        let (x, y) = (a.as_i128(), b.as_i128());
+        // i128::MIN / -1 = 2^127 fits I1024 but overflows i128
+        if !(x == i128::MIN && y == -1) {
+            return (I1024::from_i128(x / y), I1024::from_i128(x % y));
+        }
+    }
+    // word-at-a-time long division; same quotient and remainder as the
+    // bit-at-a-time loop it replaced (both are unique)
+    let (q, r) = super::word_div::divmod_signed(a.words, b.words);
+    (I1024 { words: q }, I1024 { words: r })
 }
 
 // Basic multiplication (optimized for smaller operands)
@@ -580,73 +557,6 @@ impl I1024 {
         } else {
             result
         }
-    }
-
-    /// Division and remainder using long division algorithm
-    ///
-    /// ALGORITHM: Binary long division (shift-and-subtract method)
-    /// PRECISION: Full 1024-bit precision for both quotient and remainder
-    /// CRITICAL: Foundation for Q256.256 fixed-point division
-    ///
-    /// Returns (quotient, remainder) where:
-    /// - quotient = self / rhs
-    /// - remainder = self % rhs
-    /// - self = quotient * rhs + remainder
-    #[inline(always)]
-    fn div_rem_unsigned(self, rhs: Self) -> (Self, Self) {
-        // Handle signs
-        let dividend_neg = (self.words[15] as i64) < 0;
-        let divisor_neg = (rhs.words[15] as i64) < 0;
-        let quotient_neg = dividend_neg != divisor_neg;
-
-        // Work with absolute values
-        let dividend = if dividend_neg { -self } else { self };
-        let divisor = if divisor_neg { -rhs } else { rhs };
-
-        // Quick exit for dividend < divisor
-        if dividend < divisor {
-            return (I1024::zero(), self);
-        }
-
-        // Quick exit for divisor == 1
-        if divisor == I1024::one() {
-            let quotient = if quotient_neg { -dividend } else { dividend };
-            return (quotient, I1024::zero());
-        }
-
-        // Binary long division
-        let mut quotient = I1024::zero();
-        let mut remainder = I1024::zero();
-
-        // Process each bit from MSB to LSB
-        for bit_pos in (0..1024).rev() {
-            // Shift remainder left by 1
-            remainder = remainder << 1;
-
-            // Get current bit of dividend
-            let word_idx = bit_pos / 64;
-            let bit_idx = bit_pos % 64;
-            let dividend_bit = (dividend.words[word_idx] >> bit_idx) & 1;
-
-            // Add dividend bit to remainder
-            remainder.words[0] |= dividend_bit;
-
-            // If remainder >= divisor, subtract and set quotient bit
-            if remainder >= divisor {
-                remainder = remainder - divisor;
-
-                // Set corresponding bit in quotient
-                let q_word_idx = bit_pos / 64;
-                let q_bit_idx = bit_pos % 64;
-                quotient.words[q_word_idx] |= 1u64 << q_bit_idx;
-            }
-        }
-
-        // Apply signs
-        let final_quotient = if quotient_neg { -quotient } else { quotient };
-        let final_remainder = if dividend_neg { -remainder } else { remainder };
-
-        (final_quotient, final_remainder)
     }
 }
 

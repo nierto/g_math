@@ -71,3 +71,5 @@ mod ugod_chain_persistence_test;
 mod ugod_promotion_validation;
 #[path = "wide_integer_sign_semantics.rs"]
 mod wide_integer_sign_semantics;
+#[path = "wide_division_validation.rs"]
+mod wide_division_validation;

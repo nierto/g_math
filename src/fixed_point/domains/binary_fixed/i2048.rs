@@ -591,37 +591,10 @@ pub fn i2048_div(dividend: I2048, divisor: I2048) -> I2048 {
 pub fn i2048_divmod(dividend: I2048, divisor: I2048) -> (I2048, I2048) {
     assert!(divisor != I2048::zero(), "I2048: division by zero");
 
-    // Handle signs manually
-    let dividend_neg = (dividend.words[31] & 0x8000_0000_0000_0000) != 0;
-    let divisor_neg = (divisor.words[31] & 0x8000_0000_0000_0000) != 0;
-
-    let abs_dividend = if dividend_neg { -dividend } else { dividend };
-    let abs_divisor = if divisor_neg { -divisor } else { divisor };
-
-    let mut quotient = I2048::zero();
-    let mut remainder = I2048::zero();
-
-    // Process 2048 bits from MSB to LSB
-    for i in (0..2048).rev() {
-        remainder = remainder << 1;
-        let word_idx = i / 64;
-        let bit_idx = i % 64;
-        if (abs_dividend.words[word_idx] >> bit_idx) & 1 == 1 {
-            remainder = remainder + I2048::one();
-        }
-        if remainder >= abs_divisor {
-            remainder = remainder - abs_divisor;
-            let mut q_words = quotient.words;
-            q_words[word_idx] |= 1u64 << bit_idx;
-            quotient = I2048::from_words(q_words);
-        }
-    }
-
-    let result_neg = dividend_neg != divisor_neg;
-    (
-        if result_neg { -quotient } else { quotient },
-        if dividend_neg { -remainder } else { remainder },
-    )
+    // word-at-a-time long division; same quotient and remainder as the
+    // bit-at-a-time loop it replaced (both are unique)
+    let (q, r) = super::word_div::divmod_signed(dividend.words, divisor.words);
+    (I2048::from_words(q), I2048::from_words(r))
 }
 
 /// Schoolbook long division: I2048 / I1024 → I2048

@@ -327,67 +327,10 @@ pub fn divmod_d512_by_d512(dividend: D512, divisor: D512) -> (D512, D512) {
     // a saturated quotient, a plausible value)
     assert!(!divisor.is_zero(), "divmod_d512_by_d512: division by zero");
 
-    // Optimize for cases where both fit in D256
-    if dividend.fits_in_d256() && divisor.fits_in_d256() {
-        let dividend_d256 = dividend.as_d256();
-        let divisor_d256 = divisor.as_d256();
-        let (quotient, remainder) = super::d256::divmod_d256_by_d256(dividend_d256, divisor_d256);
-        return (D512::from_d256(quotient), D512::from_d256(remainder));
-    }
-
-    // Determine signs for proper signed division
-    let dividend_negative = dividend.is_negative();
-    let divisor_negative = divisor.is_negative();
-    let quotient_negative = dividend_negative != divisor_negative;
-
-    // Work with absolute values
-    let abs_dividend = if dividend_negative {
-        negate_d512(dividend)
-    } else {
-        dividend
-    };
-
-    let abs_divisor = if divisor_negative {
-        negate_d512(divisor)
-    } else {
-        divisor
-    };
-
-    // PRODUCTION: 512-bit by 512-bit long division algorithm
-    let mut quotient_words = [0u64; 8];
-    let mut remainder = D512::zero();
-
-    // Process each bit from most significant to least significant
-    for word_idx in (0..8).rev() {
-        for bit_idx in (0..64).rev() {
-            // Shift remainder left by 1
-            remainder = shift_left_d512_by_1(remainder);
-
-            // Set the least significant bit to the current dividend bit
-            let dividend_bit = (abs_dividend.words[word_idx] >> bit_idx) & 1;
-            remainder.words[0] |= dividend_bit;
-
-            // Try to subtract divisor from remainder
-            if compare_d512_unsigned(remainder, abs_divisor) >= 0 {
-                remainder = subtract_d512_unsigned(remainder, abs_divisor);
-                // Set the corresponding quotient bit
-                quotient_words[word_idx] |= 1u64 << bit_idx;
-            }
-        }
-    }
-
-    let mut quotient = D512 { words: quotient_words };
-
-    // Apply signs
-    if quotient_negative && !is_d512_zero(quotient) {
-        quotient = negate_d512(quotient);
-    }
-
-    if dividend_negative && !is_d512_zero(remainder) {
-        remainder = negate_d512(remainder);
-    }
-
-    (quotient, remainder)
+    // word-at-a-time long division; same quotient and remainder as the
+    // bit-at-a-time loop it replaced (both are unique)
+    let (q, r) = crate::fixed_point::domains::binary_fixed::word_div::divmod_signed(dividend.words, divisor.words);
+    (D512 { words: q }, D512 { words: r })
 }
 
 /// Helper: Negate D512 value (two's complement)
@@ -404,60 +347,6 @@ pub fn negate_d512(value: D512) -> D512 {
     }
 
     D512 { words: result }
-}
-
-/// Helper: Shift D512 left by 1 bit (for long division algorithm)
-#[inline(always)]
-fn shift_left_d512_by_1(value: D512) -> D512 {
-    let mut result = [0u64; 8];
-    let mut carry = 0u64;
-
-    for i in 0..8 {
-        let word = value.words[i];
-        result[i] = (word << 1) | carry;
-        carry = word >> 63;
-    }
-
-    D512 { words: result }
-}
-
-/// Helper: Compare two D512 values as unsigned (for long division)
-#[inline(always)]
-fn compare_d512_unsigned(a: D512, b: D512) -> i8 {
-    for i in (0..8).rev() {
-        if a.words[i] > b.words[i] {
-            return 1;
-        } else if a.words[i] < b.words[i] {
-            return -1;
-        }
-    }
-    0 // Equal
-}
-
-/// Helper: Subtract b from a (unsigned, for long division)
-#[inline(always)]
-fn subtract_d512_unsigned(a: D512, b: D512) -> D512 {
-    let mut result = [0u64; 8];
-    let mut borrow = 0i128;
-
-    for i in 0..8 {
-        let diff = (a.words[i] as i128) - (b.words[i] as i128) - borrow;
-        if diff < 0 {
-            result[i] = (diff + (1i128 << 64)) as u64;
-            borrow = 1;
-        } else {
-            result[i] = diff as u64;
-            borrow = 0;
-        }
-    }
-
-    D512 { words: result }
-}
-
-/// Helper: Check if D512 is zero
-#[inline(always)]
-fn is_d512_zero(value: D512) -> bool {
-    value.words.iter().all(|&w| w == 0)
 }
 
 // Type aliases for domain clarity

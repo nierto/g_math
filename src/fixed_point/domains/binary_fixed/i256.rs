@@ -903,132 +903,22 @@ pub fn divmod_i256_by_i256(dividend: I256, divisor: I256) -> (I256, I256) {
     // a saturated quotient, a plausible value)
     assert!(!divisor.is_zero(), "I256: division by zero");
 
-    // Optimize for cases where both fit in i128
+    // Optimize for cases where both fit in i128 (i128::MIN / -1 = 2^127
+    // fits I256 but overflows i128: it takes the general path)
     if dividend.fits_in_i128() && divisor.fits_in_i128() {
         let dividend_i128 = dividend.as_i128();
         let divisor_i128 = divisor.as_i128();
-        let quotient = dividend_i128 / divisor_i128;
-        let remainder = dividend_i128 % divisor_i128;
-        return (I256::from_i128(quotient), I256::from_i128(remainder));
-    }
-
-    // Determine signs for proper signed division
-    let dividend_negative = dividend.is_negative();
-    let divisor_negative = divisor.is_negative();
-    let quotient_negative = dividend_negative != divisor_negative;
-
-    // Work with absolute values
-    let abs_dividend = if dividend_negative {
-        negate_i256(dividend)
-    } else {
-        dividend
-    };
-
-    let abs_divisor = if divisor_negative {
-        negate_i256(divisor)
-    } else {
-        divisor
-    };
-
-    // PRODUCTION: 256-bit by 256-bit long division algorithm (binary domain)
-    let mut quotient_words = [0u64; 4];
-    let mut remainder = I256::zero();
-
-    // Process each bit from most significant to least significant
-    for word_idx in (0..4).rev() {
-        for bit_idx in (0..64).rev() {
-            // Shift remainder left by 1
-            remainder = shift_left_i256_by_1(remainder);
-
-            // Set the least significant bit to the current dividend bit
-            let dividend_bit = (abs_dividend.words[word_idx] >> bit_idx) & 1;
-            remainder.words[0] |= dividend_bit;
-
-            // Try to subtract divisor from remainder
-            if compare_i256_unsigned(remainder, abs_divisor) >= 0 {
-                remainder = subtract_i256_unsigned(remainder, abs_divisor);
-                // Set the corresponding quotient bit
-                quotient_words[word_idx] |= 1u64 << bit_idx;
-            }
+        if !(dividend_i128 == i128::MIN && divisor_i128 == -1) {
+            let quotient = dividend_i128 / divisor_i128;
+            let remainder = dividend_i128 % divisor_i128;
+            return (I256::from_i128(quotient), I256::from_i128(remainder));
         }
     }
 
-    let mut quotient = I256 { words: quotient_words };
-
-    // Apply signs
-    if quotient_negative && !quotient.is_zero() {
-        quotient = negate_i256(quotient);
-    }
-
-    if dividend_negative && !remainder.is_zero() {
-        remainder = negate_i256(remainder);
-    }
-
-    (quotient, remainder)
-}
-
-/// Helper: Negate I256 value (two's complement) - binary domain
-#[inline(always)]
-fn negate_i256(value: I256) -> I256 {
-    let mut result = [0u64; 4];
-    let mut carry = 1u64;
-
-    for i in 0..4 {
-        let inverted = !value.words[i];
-        let sum = (inverted as u128) + (carry as u128);
-        result[i] = sum as u64;
-        carry = (sum >> 64) as u64;
-    }
-
-    I256 { words: result }
-}
-
-/// Helper: Shift I256 left by 1 bit (for long division algorithm)
-#[inline(always)]
-fn shift_left_i256_by_1(value: I256) -> I256 {
-    let mut result = [0u64; 4];
-    let mut carry = 0u64;
-
-    for i in 0..4 {
-        let word = value.words[i];
-        result[i] = (word << 1) | carry;
-        carry = word >> 63;
-    }
-
-    I256 { words: result }
-}
-
-/// Helper: Compare two I256 values as unsigned (for long division)
-#[inline(always)]
-fn compare_i256_unsigned(a: I256, b: I256) -> i8 {
-    for i in (0..4).rev() {
-        if a.words[i] > b.words[i] {
-            return 1;
-        } else if a.words[i] < b.words[i] {
-            return -1;
-        }
-    }
-    0 // Equal
-}
-
-/// Helper: Subtract b from a (unsigned, for long division)
-#[inline(always)]
-fn subtract_i256_unsigned(a: I256, b: I256) -> I256 {
-    let mut result = [0u64; 4];
-    let mut borrow = 0i128;
-
-    for i in 0..4 {
-        let diff = (a.words[i] as i128) - (b.words[i] as i128) - borrow;
-        if diff < 0 {
-            result[i] = (diff + (1i128 << 64)) as u64;
-            borrow = 1;
-        } else {
-            result[i] = diff as u64;
-            borrow = 0;
-        }
-    }
-
-    I256 { words: result }
+    // word-at-a-time long division; same quotient and remainder as the
+    // bit-at-a-time loop it replaced (both are unique)
+    let (q, r) = super::word_div::divmod_signed(dividend.words, divisor.words);
+    (I256 { words: q }, I256 { words: r })
 }
 
 // Type alias for convenience
