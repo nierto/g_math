@@ -554,6 +554,23 @@ binaries, about 6700 tests) and compares every public operation with the
 published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
 `docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
 
+### v0.7.3: wide division, decimal engine and attention mix, faster with the same results
+
+**Release 2026-11-22.** Speed only. Wide integer division (`I256` to
+`I2048`, `D256`, `D512`) was one quotient bit per step; it is now Knuth's
+Algorithm D on 64-bit words with a precomputed-reciprocal quotient estimate,
+and quotient and remainder come from one division. The square-root engines
+stop once their Newton sequence repeats, the atan series coefficients and
+the decimal engine's powers of ten are built at compile time (both were
+rebuilt on every call), the decimal engine divides by powers of ten with
+reciprocals, and the softmax value mix on the i32 formats runs on AVX2.
+Q128.128 `acos` went from 147 us to 6 us and `DecimalFixed<37>` `ln` from
+117 us to 13 us. Every result equals 0.7.2: a differential gate links the
+published 0.7.2 and compares about 1.6 million outcomes (values, errors and
+panics) across every format; none differ. Three division edge cases are
+fixed (`I1024::MIN / d`, `i128::MIN / -1` on the wide types, `MIN / -1`).
+Added `fused::dot_many_scaled`.
+
 ### v0.7.2: signed wide-integer products
 
 **Release 2026-11-17.** `I256::mul_to_i512`, `I512::mul_to_i1024` and
