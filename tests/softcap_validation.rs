@@ -17,6 +17,7 @@ macro_rules! suite {
             use g_math::fixed_point::imperative::fused::{
                 softcap, softcap_in_place, softcap_slice, softcap_wide_slice, softcapped_swiglu, softcapped_swiglu_interleaved,
                 softcapped_swiglu_interleaved_into, softcapped_swiglu_interleaved_wide, softcapped_swiglu_interleaved_wide_into,
+                sigmoid_mul_wide_into, sigmoid_mul_wide_slice, softcap_top_k,
             };
             use g_math::fixed_point::{Fixed, Storage, WideInt};
 
@@ -147,6 +148,51 @@ macro_rules! suite {
                 }
                 println!("softcapped_swiglu wide: {n} values equal");
                 assert!(n > 0);
+            }
+
+            #[test]
+            fn sigmoid_mul_wide_is_correctly_rounded() {
+                if !EXACT {
+                    return;
+                }
+                // both inputs within the storage range: then they also fit the 2F word
+                let rows: Vec<_> = refs::SIGMUL_WIDE.iter().filter(|r| fits(&[r.2]) && wide_fits(r.0) && wide_fits(r.1)).collect();
+                let xs: Vec<W> = rows.iter().map(|r| wide(r.0)).collect();
+                let gs: Vec<W> = rows.iter().map(|r| wide(r.1)).collect();
+                let want: Vec<FixedPoint> = rows.iter().map(|r| fp(r.2)).collect();
+                assert_eq!(sigmoid_mul_wide_slice::<$S, $F>(&xs, &gs), want);
+                let mut out = vec![FixedPoint::ZERO; want.len()];
+                sigmoid_mul_wide_into::<$S, $F>(&xs, &gs, &mut out);
+                assert_eq!(out, want);
+                println!("sigmoid_mul_wide: {} values equal", rows.len());
+                assert!(!rows.is_empty());
+            }
+
+            /// softcap_top_k returns what softcapping everything and sorting
+            /// (value descending, index ascending) returns, ties at the cutoff included.
+            #[test]
+            fn softcap_top_k_equals_full_sort() {
+                if !EXACT {
+                    return;
+                }
+                let mut s: u64 = 0x70B + $F;
+                let mut next = || { s ^= s >> 12; s ^= s << 25; s ^= s >> 27; s.wrapping_mul(0x2545_F491_4F6C_DD1D) };
+                // k / 256 built from the raw word (exact for F >= 8, no intermediate value)
+                let unit = |k: i64| FixedPoint::from_raw(<$S as WideInt>::from_i128((k as i128) << ($F as u32).saturating_sub(8)));
+                let cap = fp("1.5");
+                for trial in 0..20 {
+                    let n = [1usize, 7, 40, 300][trial % 4];
+                    let lim = if fits(&["30"]) { 30 * 256 } else { 256 };
+                    // repeated values and close neighbours make rounding ties
+                    let logits: Vec<FixedPoint> = (0..n).map(|_| { let r = next(); unit(((r >> 8) % (2 * lim + 1)) as i64 - lim as i64 + if r % 5 == 0 { 0 } else { 0 }) }).collect();
+                    let full = softcap_slice(&logits, cap);
+                    let mut all: Vec<(usize, FixedPoint)> = full.into_iter().enumerate().collect();
+                    all.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    for k in [0usize, 1, 3, 10, n] {
+                        let want: Vec<_> = all.iter().take(k).cloned().collect();
+                        assert_eq!(softcap_top_k(&logits, cap, k), want, "n {n} k {k}");
+                    }
+                }
             }
 
             #[test]

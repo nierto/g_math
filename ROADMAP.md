@@ -554,6 +554,16 @@ binaries, about 6700 tests) and compares every public operation with the
 published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
 `docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
 
+### v0.7.5: wide sigmoid gate and softcap top-k
+
+**Release 2026-11-24.** Additive. `fused::sigmoid_mul_wide_slice`:
+`x * sigmoid(gate)` on raws at `2F` fraction bits (wide-output matvec
+results), correctly rounded at every format, 13.3 ns per output at Q22.10
+(the not correctly rounded `sigmoid_mul`: 54.1 ns). `fused::softcap_top_k`:
+the `k` largest softcapped logits, exactly what softcapping everything and
+sorting gives, 0.59 ms against 2.8 ms for 201024 logits (greedy and top-k
+sampling). Gated against mpmath at every format and split.
+
 ### v0.7.4: softcap and softcapped SwiGLU, correctly rounded
 
 **Release 2026-11-23.** Additive. `fused::softcap` (`cap * tanh(x / cap)`,

@@ -99,6 +99,15 @@ def main():
             kg = (rng.next() >> 8) % (2 * wl * 65536 + 1) - wl * 65536
             ku = (rng.next() >> 8) % (2 * wl * 65536 + 1) - wl * 65536
             swi_w.append((kg, ku, dec(gc), dec(uc), val(swiglu(Fr(kg, 65536), Fr(ku, 65536), gc, uc))))
+    # x * sigmoid(g) on wide inputs (k / 65536), |x| <= 120 and small pairs for the narrow splits
+    sig_w = []
+    for i in range(80):
+        lim = 120 if i < 60 else 1
+        kx = (rng.next() >> 8) % (2 * lim * 65536 + 1) - lim * 65536
+        glim = 40 if i < 60 else 1  # small gates too: they fit the narrowest wide word (Q4.60 at Q2.30)
+        kg = (rng.next() >> 8) % (2 * glim * 65536 + 1) - glim * 65536
+        x, g = mpf(kx) / 65536, mpf(kg) / 65536
+        sig_w.append((kx, kg, val(x * sigmoid(g))))
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "data", "softcap_refs.rs")
     q = lambda s: '"' + s + '"'
     with open(out, "w") as f:
@@ -115,6 +124,9 @@ def main():
         f.write("];\n\n/// (kg, ku, gate cap, up cap, value) with gate = kg / 65536, up = ku / 65536 (wide inputs)\npub const SWIGLU_WIDE: &[(i64, i64, &str, &str, &str)] = &[\n")
         for kg, ku, gc, uc, y in swi_w:
             f.write(f"    ({kg}, {ku}, {q(gc)}, {q(uc)}, {q(y)}),\n")
+        f.write("];\n\n/// (kx, kg, x * sigmoid(g)) with x = kx / 65536, g = kg / 65536 (wide inputs)\npub const SIGMUL_WIDE: &[(i64, i64, &str)] = &[\n")
+        for kx, kg, y in sig_w:
+            f.write(f"    ({kx}, {kg}, {q(y)}),\n")
         f.write("];\n")
     print(f"{len(soft)} softcap, {len(soft_w)} wide softcap, {len(swi)} swiglu, {len(swi_w)} wide swiglu; wrote {os.path.normpath(out)}")
 

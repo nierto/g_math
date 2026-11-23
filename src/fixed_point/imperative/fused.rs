@@ -925,6 +925,91 @@ where
     }
 }
 
+/// `x * sigmoid(gate)` for wide inputs (raws at `2F` fraction bits, the
+/// compute word, as wide-output matvecs return them; a storage value
+/// widens exactly as `raw << F`), the exact value rounded once to storage:
+/// nearest, ties toward +infinity. A gated attention output or any
+/// sigmoid gate whose operands come from projections, without rounding
+/// them first. First stage on the 32-bit words and exact stage as in
+/// [`softcap`].
+///
+/// # Panics
+/// Panics if the slices differ in length or a result exceeds the storage
+/// range (`|x * sigmoid(gate)| <= |x|`, so only for an `x` beyond it).
+pub fn sigmoid_mul_wide_slice<S: Storage, const F: u32>(x: &[Compute<Fixed<S, F>>], gate: &[Compute<Fixed<S, F>>]) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = vec![Fixed::from_raw(S::ZERO); x.len()];
+    sigmoid_mul_wide_into(x, gate, &mut out);
+    out
+}
+
+/// [`sigmoid_mul_wide_slice`] into a caller buffer of `x.len()` values.
+///
+/// # Panics
+/// As [`sigmoid_mul_wide_slice`], and if `out` has the wrong length.
+pub fn sigmoid_mul_wide_into<S: Storage, const F: u32>(x: &[Compute<Fixed<S, F>>], gate: &[Compute<Fixed<S, F>>], out: &mut [Fixed<S, F>])
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    assert_eq!(x.len(), gate.len(), "sigmoid_mul_wide: length mismatch");
+    assert_eq!(out.len(), x.len(), "sigmoid_mul_wide: output length");
+    let o = Fixed::raw_slice_mut(out);
+    if !S::sigmul_wide_into_fast::<F>(x, gate, o) {
+        for ((oi, &xi), &gi) in o.iter_mut().zip(x).zip(gate) {
+            *oi = super::softcap::sigmul_exact::<S, S::Compute, F>(xi, gi, 2 * F);
+        }
+    }
+}
+
+/// The `k` largest values of [`softcap`] over `logits` with their indices,
+/// largest first, ties by lower index: exactly what softcapping every
+/// logit and sorting would give, at the cost of a selection and about `k`
+/// softcaps. For greedy or top-k sampling; sampling with a temperature or
+/// top-p needs every softcapped logit ([`softcap_slice`]).
+///
+/// Correct: the correctly rounded softcap is monotone in the logit, so a
+/// logit below the window of the largest raw logits cannot exceed the
+/// window's values; the window grows while its last value still ties the
+/// k-th (rounding can make neighbours equal).
+///
+/// # Panics
+/// Panics if `cap` is zero.
+pub fn softcap_top_k<S: Storage, const F: u32>(logits: &[Fixed<S, F>], cap: Fixed<S, F>, k: usize) -> Vec<(usize, Fixed<S, F>)>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    cap_nonzero(cap.raw(), "softcap");
+    let n = logits.len();
+    let k = k.min(n);
+    if k == 0 {
+        return Vec::new();
+    }
+    let raw_order = |a: &usize, b: &usize| logits[*b].raw().cmp(&logits[*a].raw()).then(a.cmp(b));
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut m = (k + 16).min(n);
+    let (window, capped) = loop {
+        if m < n {
+            idx.select_nth_unstable_by(m - 1, raw_order);
+        }
+        let mut w: Vec<usize> = idx[..m].to_vec();
+        w.sort_unstable_by(raw_order);
+        let vals: Vec<Fixed<S, F>> = w.iter().map(|&i| logits[i]).collect();
+        let sc = softcap_slice(&vals, cap);
+        // softcap is monotone along the raw order: below the window every value is <= sc[m - 1]
+        if m == n || sc[m - 1] < sc[k - 1] {
+            break (w, sc);
+        }
+        m = (2 * m).min(n);
+    };
+    let t = capped[k - 1];
+    let mut cand: Vec<(usize, Fixed<S, F>)> = window.into_iter().zip(capped).filter(|(_, v)| *v >= t).collect();
+    cand.sort_unstable_by(|a, b| b.1.raw().cmp(&a.1.raw()).then(a.0.cmp(&b.0)));
+    cand.truncate(k);
+    cand
+}
+
 /// Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the
 /// wide tier and the sum rounded to storage once. A zero weight contributes
 /// zero. The weights are used as given: they are not normalised.

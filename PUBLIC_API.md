@@ -390,6 +390,9 @@ Modules: g_math::fixed_point::imperative::fused
 | `softcapped_swiglu_interleaved_into` | fn | [`softcapped_swiglu_interleaved`] into a caller buffer of `gate_up.len() / 2` values. |
 | `softcapped_swiglu_interleaved_wide` | fn | [`softcapped_swiglu_interleaved`] of wide inputs: raws at `2F` fraction bits (the compute word, as a wide-output matvec returns them), so the projection and the activation round once together instead of twice. |
 | `softcapped_swiglu_interleaved_wide_into` | fn | [`softcapped_swiglu_interleaved_wide`] into a caller buffer of `gate_up.len() / 2` values. |
+| `sigmoid_mul_wide_slice` | fn | `x * sigmoid(gate)` for wide inputs (raws at `2F` fraction bits, the compute word, as wide-output matvecs return them; a storage value widens exactly as `raw << F`), the exact value rounded once to storage: nearest, ties toward +infinity. |
+| `sigmoid_mul_wide_into` | fn | [`sigmoid_mul_wide_slice`] into a caller buffer of `x.len()` values. |
+| `softcap_top_k` | fn | The `k` largest values of [`softcap`] over `logits` with their indices, largest first, ties by lower index: exactly what softcapping every logit and sorting would give, at the cost of a selection and about `k` softcaps. |
 | `entropy` | fn | Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the wide tier and the sum rounded to storage once. |
 | `dot_many` | fn | One query against many keys stored in one contiguous buffer: element `k` of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each accumulated at the compute tier and rounded to storage once, exactly as [`dot`] and `FixedVector::<Fixed<S, F>>::dot` round. |
 | `dot_many_scaled` | fn | [`dot_many`] with every result then multiplied by `scale`: element `k` is `dot_many(query, keys_flat, dim)[k] * scale`, both roundings kept (the dot rounded to storage, then the product rounded to nearest, ties toward +infinity, as the `*` operator rounds). |

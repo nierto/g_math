@@ -310,6 +310,13 @@ pub trait Storage: WideInt {
         false
     }
     #[doc(hidden)]
+    fn sigmul_wide_into_fast<const F: u32>(_x: &[Self::Compute], _gate: &[Self::Compute], _out: &mut [Self]) -> bool
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        false
+    }
+    #[doc(hidden)]
     fn entropy_fast<const F: u32>(_weights: &[Self]) -> Option<Result<Self, OverflowDetected>>
     where
         Fixed<Self, F>: FixedNum<Storage = Self>,
@@ -475,6 +482,13 @@ impl Storage for i32 {
         Fixed<i32, F>: FixedNum<Storage = i32>,
     {
         crate::fixed_point::imperative::softcap::swiglu_i32_into::<i64, F>(gate_up, 2 * F, gate_cap, up_cap, out);
+        true
+    }
+    fn sigmul_wide_into_fast<const F: u32>(x: &[i64], gate: &[i64], out: &mut [i32]) -> bool
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        crate::fixed_point::imperative::softcap::sigmul_i32_into::<i64, F>(x, gate, 2 * F, out);
         true
     }
     fn entropy_fast<const F: u32>(weights: &[i32]) -> Option<Result<i32, OverflowDetected>>

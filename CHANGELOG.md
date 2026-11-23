@@ -5,6 +5,37 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-11-24
+
+Additive: nothing already shipped changes; every existing function returns
+what it returned in 0.7.4.
+
+### Added
+
+- **`fused::sigmoid_mul_wide_slice`** (and `_into`): `x * sigmoid(gate)` for
+  wide inputs (raws at `2F` fraction bits, as wide-output matvecs return
+  them), the exact value rounded once to storage at every format. The same
+  table-driven first stage as `softcap` on the 32-bit words: 13.3 ns per
+  output at Q22.10 on an i7-7700, against 54.1 ns for `sigmoid_mul` (which
+  is not correctly rounded). A gated attention output without rounding the
+  projections first.
+- **`fused::softcap_top_k(logits, cap, k)`**: the `k` largest softcapped
+  logits with their indices, exactly what softcapping every logit and
+  sorting gives (the correctly rounded softcap is monotone; the candidate
+  window grows past rounding ties). 0.59 ms against 2.8 ms for 201024
+  logits; for greedy and top-k sampling (temperature or top-p sampling needs
+  every value).
+
+### Validation
+
+- `tests/softcap_validation.rs`: 80 more mpmath references for the wide
+  sigmoid gate at every format; `softcap_top_k` equal to the full sort with
+  constructed ties. Unit tests: the first stage equal to the exact stage on
+  400,000 random pairs (the undecided ones, about 1 in 6000, are genuine
+  near-ties: a half-unit `x` times a gate within 2^-40 of 1, settled by the
+  exact stage), and through the API with every element forced to the exact
+  stage.
+
 ## [0.7.4] - 2026-11-23
 
 Additive: nothing already shipped changes; every existing function returns

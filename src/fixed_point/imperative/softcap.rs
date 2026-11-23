@@ -208,6 +208,35 @@ fn swiglu_fast_n<const N: usize>(t: Tables, g: [i128; N], u: [i128; N], f: u32, 
     out
 }
 
+/// `x * sigmoid(g)` for `N` pairs of raws at `f` fraction bits, the result at
+/// `frac`: sigmoid at 62 fraction bits from one exponential and one
+/// reciprocal (within 2^-58: exponential 2^-58.6, reciprocal 2^-60,
+/// floors), the product carried in units of 2^-(frac + 32) with the bound
+/// `|x| 2^(frac - f - 26)`, doubled, plus the floors.
+#[inline(always)]
+fn sigmul_fast_n<const N: usize>(t: Tables, x: [i128; N], g: [i128; N], f: u32, frac: u32) -> [Option<i128>; N] {
+    let mut a = [0u128; N];
+    for i in 0..N {
+        a[i] = plain_arg(g[i].unsigned_abs(), f);
+    }
+    let e = exp_neg_n(t.exp, a);
+    let mut d = [0u64; N];
+    for i in 0..N {
+        d[i] = ONE + e[i];
+    }
+    let y = recip_n(t.rec, d);
+    let mut out = [None; N];
+    for i in 0..N {
+        let num = if g[i] >= 0 { ONE } else { e[i] };
+        let q = (num as u128 * y[i] as u128) >> 62;
+        let xa = x[i].unsigned_abs();
+        let w = (xa * q) >> (30 + f - frac);
+        let bound = (xa >> (f - frac + 25)) + 3;
+        out[i] = if x[i] == 0 { Some(0) } else { decide(w, bound, x[i] < 0) };
+    }
+    out
+}
+
 /// `1 / n!` at 62 fraction bits, floored.
 const INV_FACT: [u64; 7] = [ONE, ONE, ONE / 2, ONE / 6, ONE / 24, ONE / 120, ONE / 720];
 
@@ -412,6 +441,31 @@ where
     }
 }
 
+struct SigmulForm<W> {
+    x: W,
+    g: W,
+    f: u32,
+}
+
+impl<W: WideInt, S: Storage, const F: u32> Formula<Fixed<S, F>> for SigmulForm<W>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    fn eval<B: Num<Fixed<S, F>>>(&self) -> R<Vec<B>> {
+        let x = B::from_word(self.x, self.f)?;
+        let g = B::from_word(self.g, self.f)?;
+        Ok(vec![x.mul(sigmoid::<Fixed<S, F>, B>(g)?)?])
+    }
+}
+
+/// `x * sigmoid(g)` rounded once (raws at `f`, the result at `F`): the exact stage alone.
+pub(crate) fn sigmul_exact<S: Storage, W: WideInt, const F: u32>(x: W, g: W, f: u32) -> S
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    settled::<S, F>(settle::<Fixed<S, F>, _>(&SigmulForm { x, g, f }), "sigmoid_mul_wide")
+}
+
 fn settled<S: Storage, const F: u32>(r: R<Vec<S>>, what: &str) -> S
 where
     Fixed<S, F>: FixedNum<Storage = S>,
@@ -513,6 +567,32 @@ where
         *o = match swiglu_fast(t, pair[0].into(), pair[1].into(), f, &g_cap, &u_cap, F).filter(|_| fast_allowed()) {
             Some(v) => narrow_i32(v, "softcapped_swiglu"),
             None => swiglu_exact::<i32, W, F>(pair[0], pair[1], f, gc, uc),
+        };
+    }
+}
+
+/// `out[i] = x[i] * sigmoid(g[i])` for raws at `f` fraction bits.
+pub(crate) fn sigmul_i32_into<W: WideInt + Into<i128>, const F: u32>(x: &[W], g: &[W], f: u32, out: &mut [i32])
+where
+    Fixed<i32, F>: FixedNum<Storage = i32>,
+{
+    let t = table();
+    const L: usize = 4;
+    let n4 = out.len() / L * L;
+    for ((oc, xc), gc) in out[..n4].chunks_exact_mut(L).zip(x[..n4].chunks_exact(L)).zip(g[..n4].chunks_exact(L)) {
+        let r = sigmul_fast_n::<L>(t, std::array::from_fn(|i| xc[i].into()), std::array::from_fn(|i| gc[i].into()), f, F);
+        for i in 0..L {
+            oc[i] = match r[i].filter(|_| fast_allowed()) {
+                Some(v) => narrow_i32(v, "sigmoid_mul_wide"),
+                None => sigmul_exact::<i32, W, F>(xc[i], gc[i], f),
+            };
+        }
+    }
+    for i in n4..out.len() {
+        let [r] = sigmul_fast_n::<1>(t, [x[i].into()], [g[i].into()], f, F);
+        out[i] = match r.filter(|_| fast_allowed()) {
+            Some(v) => narrow_i32(v, "sigmoid_mul_wide"),
+            None => sigmul_exact::<i32, W, F>(x[i], g[i], f),
         };
     }
 }
@@ -735,7 +815,7 @@ mod tests {
     /// the public slice functions return what the fast stage returns.
     #[test]
     fn forced_exact_stage_equals_fast_stage_through_the_api() {
-        use crate::fixed_point::imperative::fused::{softcap_slice, softcap_wide_slice, softcapped_swiglu_interleaved, softcapped_swiglu_interleaved_wide};
+        use crate::fixed_point::imperative::fused::{sigmoid_mul_wide_slice, softcap_slice, softcap_wide_slice, softcapped_swiglu_interleaved, softcapped_swiglu_interleaved_wide};
         type X = Fixed<i32, 10>;
         let mut rng = Rng(0xFA11);
         let mut draw = |bits: u32| -> i64 {
@@ -746,7 +826,8 @@ mod tests {
         let xs: Vec<X> = (0..4000).map(|_| X::from_raw(draw(17) as i32)).collect();
         let ws: Vec<i64> = (0..4000).map(|_| draw(27)).collect();
         let (c30, c4, c25) = (X::from_raw(30 << 10), X::from_raw(4 << 10), X::from_raw(25 << 10));
-        let run = || (softcap_slice(&xs, c30), softcap_wide_slice::<i32, 10>(&ws, c30), softcapped_swiglu_interleaved(&xs, c4, c25), softcapped_swiglu_interleaved_wide::<i32, 10>(&ws, c4, c25));
+        let gs: Vec<i64> = ws.iter().rev().map(|&w| w >> 3).collect();
+        let run = || (softcap_slice(&xs, c30), softcap_wide_slice::<i32, 10>(&ws, c30), softcapped_swiglu_interleaved(&xs, c4, c25), softcapped_swiglu_interleaved_wide::<i32, 10>(&ws, c4, c25), sigmoid_mul_wide_slice::<i32, 10>(&ws, &gs));
         let fast = run();
         FORCE_EXACT.store(true, std::sync::atomic::Ordering::Relaxed);
         let exact = run();
@@ -755,6 +836,38 @@ mod tests {
         assert_eq!(fast.1, exact.1);
         assert_eq!(fast.2, exact.2);
         assert_eq!(fast.3, exact.3);
+        assert_eq!(fast.4, exact.4);
+    }
+
+    /// x * sigmoid(g), wide inputs: random raws at 2F (and at F) against the exact stage.
+    #[test]
+    fn sigmul_fast_equals_exact_random() {
+        let t = table();
+        let mut rng = Rng(0x5161);
+        let (mut decided, mut undecided) = (0u64, 0u64);
+        for i in 0..400_000u32 {
+            let r = rng.next();
+            let bits = if r % 8 == 0 { 34 } else { 26 };
+            let draw = |rng: &mut Rng| -> i64 { let v = rng.next(); let m = ((v >> 8) & ((1u64 << bits) - 1)) as i64; if v & 1 == 1 { -m } else { m } };
+            let (x, g) = (draw(&mut rng), draw(&mut rng));
+            let (f, wide) = if i % 2 == 0 { (20, true) } else { (10, false) };
+            let (x, g) = if wide { (x, g) } else { ((x >> 8) as i32 as i64, (g >> 8) as i32 as i64) };
+            let [got] = sigmul_fast_n::<1>(t, [x as i128], [g as i128], f, 10);
+            let want = std::panic::catch_unwind(|| if wide { sigmul_exact::<i32, i64, 10>(x, g, 20) } else { sigmul_exact::<i32, i32, 10>(x as i32, g as i32, 10) }).ok();
+            match (got, want) {
+                (Some(v), Some(w)) => {
+                    assert_eq!(v, w as i128, "sigmul x {x} g {g} f {f}");
+                    decided += 1;
+                }
+                (Some(v), None) => assert!(i32::try_from(v).is_err()),
+                (None, _) => undecided += 1,
+            }
+        }
+        // Undecided here are genuine near-ties: a wide x that is an exact half
+        // unit at the output (1 in 1024 of these random raws) times a gate
+        // within 2^-40 of 1; the exact stage settles them (checked above).
+        eprintln!("sigmul: {decided} decided equal to the exact stage, {undecided} undecided (near-ties)");
+        assert!(undecided * 1_000 < decided);
     }
 
     /// Wide-input softcap: random raws at 2F against the exact stage.
