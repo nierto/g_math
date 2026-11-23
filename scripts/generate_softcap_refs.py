@@ -78,19 +78,26 @@ def main():
     for c in caps:
         for x in edges + [grid(rng, 8, 120) for _ in range(20)]:
             soft.append((dec(x), dec(c), val(softcap(x, c))))
-        for _ in range(10):
-            k = (rng.next() >> 8) % (2 * 120 * 65536 + 1) - 120 * 65536
+        for i in range(10):
+            lim = 120 if i < 6 else 1
+            k = (rng.next() >> 8) % (2 * lim * 65536 + 1) - lim * 65536
             soft_w.append((k, dec(c), val(softcap(Fr(k, 65536), c))))
-    for gc, uc in [(Fr(4), Fr(25)), (Fr(-4), Fr(25)), (Fr(1, 2), Fr(3)), (Fr(8), Fr(12))]:
+    # the last pair keeps caps, inputs and results within +-1.5: it fits the narrowest split (Q2.30)
+    for gc, uc in [(Fr(4), Fr(25)), (Fr(-4), Fr(25)), (Fr(1, 2), Fr(3)), (Fr(8), Fr(12)), (Fr(1, 2), Fr(3, 2))]:
         bound = abs(gc * uc)
         assert bound <= 120
-        pairs = [(Fr(0), Fr(5)), (Fr(5), Fr(0)), (Fr(120), Fr(120)), (Fr(-120), Fr(120)), (Fr(-120), Fr(-120)), (Fr(1, 256), Fr(-1, 256))]
-        pairs += [(grid(rng, 8, 120), grid(rng, 8, 120)) for _ in range(34)]
+        lim = 120 if bound > 1 else 1
+        if lim == 120:
+            pairs = [(Fr(0), Fr(5)), (Fr(5), Fr(0)), (Fr(120), Fr(120)), (Fr(-120), Fr(120)), (Fr(-120), Fr(-120)), (Fr(1, 256), Fr(-1, 256))]
+        else:
+            pairs = [(Fr(0), Fr(1)), (Fr(1), Fr(0)), (Fr(3, 2), Fr(3, 2)), (Fr(-3, 2), Fr(3, 2)), (Fr(-3, 2), Fr(-3, 2)), (Fr(1, 256), Fr(-1, 256))]
+        pairs += [(grid(rng, 8, lim), grid(rng, 8, lim)) for _ in range(34)]
         for g, u in pairs:
             swi.append((dec(g), dec(u), dec(gc), dec(uc), val(swiglu(g, u, gc, uc))))
+        wl = 64 if lim == 120 else 1
         for _ in range(15):
-            kg = (rng.next() >> 8) % (2 * 64 * 65536 + 1) - 64 * 65536
-            ku = (rng.next() >> 8) % (2 * 64 * 65536 + 1) - 64 * 65536
+            kg = (rng.next() >> 8) % (2 * wl * 65536 + 1) - wl * 65536
+            ku = (rng.next() >> 8) % (2 * wl * 65536 + 1) - wl * 65536
             swi_w.append((kg, ku, dec(gc), dec(uc), val(swiglu(Fr(kg, 65536), Fr(ku, 65536), gc, uc))))
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "data", "softcap_refs.rs")
     q = lambda s: '"' + s + '"'

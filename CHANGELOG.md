@@ -33,7 +33,7 @@ what it returned in 0.7.3.
 
 ### Validation
 
-- `tests/softcap_validation.rs`: 442 mpmath references (150 digits;
+- `tests/softcap_validation.rs`: 497 mpmath references (150 digits;
   `scripts/generate_softcap_refs.py`) at every format and split, every form,
   equal to the correctly rounded value. Unit tests in
   `imperative/softcap.rs`: the table within half a unit at 2^-62 of every

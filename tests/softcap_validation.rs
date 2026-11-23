@@ -31,22 +31,45 @@ macro_rules! suite {
                 FixedPoint::from_str(s)
             }
 
+            /// Every value of a reference row in range at this format (the
+            /// narrow-range splits hold only part of the table).
+            fn fits(vals: &[&str]) -> bool {
+                vals.iter().all(|v| FixedPoint::try_from_str(v).is_ok())
+            }
+
+            /// The references are multiples of 2^-8 (2^-16 for the wide
+            /// inputs): exact from 8 fraction bits up. Below that (the edge
+            /// splits) the suite compiles and does nothing.
+            const EXACT: bool = $F >= 8;
+
+            /// Whether `k / 65536` lies within the storage range (the wide
+            /// forms take any compute-word input; the references stay in range).
+            fn wide_fits(k: i64) -> bool {
+                FixedPoint::try_from_int(((k.unsigned_abs() >> 16) + 1) as i32).is_ok()
+            }
+
             /// `k / 65536` as a raw at 2F fraction bits (exact: 2F >= 16).
             fn wide(k: i64) -> W {
-                W::from_i128(k as i128).shl_bits(2 * $F - 16)
+                W::from_i128(k as i128).shl_bits((2 * $F as u32).saturating_sub(16))
             }
 
             #[test]
             fn softcap_is_correctly_rounded() {
+                if !EXACT {
+                    return;
+                }
                 let mut n = 0;
-                for &(x, c, want) in refs::SOFTCAP {
+                for &(x, c, want) in refs::SOFTCAP.iter().filter(|r| fits(&[r.0, r.1, r.2])) {
                     let (x, c, want) = (fp(x), fp(c), fp(want));
                     assert_eq!(softcap(x, c), want, "softcap({x}, {c})");
                     n += 1;
                 }
                 // the slice and in-place forms per cap
                 for cap in ["30", "4", "25", "-7", "0.75", "100"] {
-                    let rows: Vec<_> = refs::SOFTCAP.iter().filter(|r| r.1 == cap).collect();
+                    let rows: Vec<_> = refs::SOFTCAP.iter().filter(|r| r.1 == cap && fits(&[r.0, r.1, r.2])).collect();
+                    if rows.is_empty() {
+                        continue;
+                    }
                     let xs: Vec<FixedPoint> = rows.iter().map(|r| fp(r.0)).collect();
                     let want: Vec<FixedPoint> = rows.iter().map(|r| fp(r.2)).collect();
                     assert_eq!(softcap_slice(&xs, fp(cap)), want, "softcap_slice cap {cap}");
@@ -55,26 +78,43 @@ macro_rules! suite {
                     assert_eq!(ys, want, "softcap_in_place cap {cap}");
                 }
                 println!("softcap: {n} values equal the correctly rounded references");
+                assert!(n > 0);
             }
 
             #[test]
             fn softcap_wide_is_correctly_rounded() {
-                for &(k, c, want) in refs::SOFTCAP_WIDE {
+                if !EXACT {
+                    return;
+                }
+                let mut n = 0;
+                for &(k, c, want) in refs::SOFTCAP_WIDE.iter().filter(|r| fits(&[r.1, r.2]) && wide_fits(r.0)) {
+                    n += 1;
                     assert_eq!(softcap_wide_slice::<$S, $F>(&[wide(k)], fp(c)), vec![fp(want)], "softcap_wide({k}/65536, {c})");
                 }
-                let xs: Vec<W> = refs::SOFTCAP_WIDE.iter().filter(|r| r.1 == "30").map(|r| wide(r.0)).collect();
-                let want: Vec<FixedPoint> = refs::SOFTCAP_WIDE.iter().filter(|r| r.1 == "30").map(|r| fp(r.2)).collect();
-                assert_eq!(softcap_wide_slice::<$S, $F>(&xs, fp("30")), want);
-                println!("softcap wide: {} values equal", refs::SOFTCAP_WIDE.len());
+                if fits(&["30", "120"]) {
+                    let xs: Vec<W> = refs::SOFTCAP_WIDE.iter().filter(|r| r.1 == "30").map(|r| wide(r.0)).collect();
+                    let want: Vec<FixedPoint> = refs::SOFTCAP_WIDE.iter().filter(|r| r.1 == "30").map(|r| fp(r.2)).collect();
+                    assert_eq!(softcap_wide_slice::<$S, $F>(&xs, fp("30")), want);
+                }
+                println!("softcap wide: {n} values equal");
+                assert!(n > 0);
             }
 
             #[test]
             fn softcapped_swiglu_is_correctly_rounded() {
-                for &(g, u, gc, uc, want) in refs::SWIGLU {
+                if !EXACT {
+                    return;
+                }
+                let mut n = 0;
+                for &(g, u, gc, uc, want) in refs::SWIGLU.iter().filter(|r| fits(&[r.0, r.1, r.2, r.3, r.4])) {
+                    n += 1;
                     assert_eq!(softcapped_swiglu(fp(g), fp(u), fp(gc), fp(uc)), fp(want), "swiglu({g}, {u}; {gc}, {uc})");
                 }
-                for (gc, uc) in [("4", "25"), ("-4", "25"), ("0.5", "3"), ("8", "12")] {
-                    let rows: Vec<_> = refs::SWIGLU.iter().filter(|r| r.2 == gc && r.3 == uc).collect();
+                for (gc, uc) in [("4", "25"), ("-4", "25"), ("0.5", "3"), ("8", "12"), ("0.5", "1.5")] {
+                    let rows: Vec<_> = refs::SWIGLU.iter().filter(|r| r.2 == gc && r.3 == uc && fits(&[r.0, r.1, r.2, r.3, r.4])).collect();
+                    if rows.is_empty() {
+                        continue;
+                    }
                     let gate_up: Vec<FixedPoint> = rows.iter().flat_map(|r| [fp(r.0), fp(r.1)]).collect();
                     let want: Vec<FixedPoint> = rows.iter().map(|r| fp(r.4)).collect();
                     assert_eq!(softcapped_swiglu_interleaved(&gate_up, fp(gc), fp(uc)), want, "interleaved {gc} {uc}");
@@ -82,13 +122,22 @@ macro_rules! suite {
                     softcapped_swiglu_interleaved_into(&gate_up, fp(gc), fp(uc), &mut out);
                     assert_eq!(out, want, "interleaved_into {gc} {uc}");
                 }
-                println!("softcapped_swiglu: {} values equal", refs::SWIGLU.len());
+                println!("softcapped_swiglu: {n} values equal");
+                assert!(n > 0);
             }
 
             #[test]
             fn softcapped_swiglu_wide_is_correctly_rounded() {
-                for (gc, uc) in [("4", "25"), ("-4", "25"), ("0.5", "3"), ("8", "12")] {
-                    let rows: Vec<_> = refs::SWIGLU_WIDE.iter().filter(|r| r.2 == gc && r.3 == uc).collect();
+                if !EXACT {
+                    return;
+                }
+                let mut n = 0;
+                for (gc, uc) in [("4", "25"), ("-4", "25"), ("0.5", "3"), ("8", "12"), ("0.5", "1.5")] {
+                    let rows: Vec<_> = refs::SWIGLU_WIDE.iter().filter(|r| r.2 == gc && r.3 == uc && fits(&[r.2, r.3, r.4]) && wide_fits(r.0) && wide_fits(r.1)).collect();
+                    if rows.is_empty() {
+                        continue;
+                    }
+                    n += rows.len();
                     let gate_up: Vec<W> = rows.iter().flat_map(|r| [wide(r.0), wide(r.1)]).collect();
                     let want: Vec<FixedPoint> = rows.iter().map(|r| fp(r.4)).collect();
                     assert_eq!(softcapped_swiglu_interleaved_wide::<$S, $F>(&gate_up, fp(gc), fp(uc)), want, "wide {gc} {uc}");
@@ -96,7 +145,8 @@ macro_rules! suite {
                     softcapped_swiglu_interleaved_wide_into::<$S, $F>(&gate_up, fp(gc), fp(uc), &mut out);
                     assert_eq!(out, want, "wide_into {gc} {uc}");
                 }
-                println!("softcapped_swiglu wide: {} values equal", refs::SWIGLU_WIDE.len());
+                println!("softcapped_swiglu wide: {n} values equal");
+                assert!(n > 0);
             }
 
             #[test]

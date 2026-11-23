@@ -561,8 +561,8 @@ the logit and activation softcap) and `fused::softcapped_swiglu`
 (`gate_cap * tanh(gate / gate_cap) * sigmoid(gate) * up_cap * tanh(up / up_cap)`,
 interleaved gate/up input, and wide inputs at `2F` fraction bits so a
 projection and its activation round once together). Every result is the
-exact value rounded once to storage at every format, gated against 442
-mpmath references at ten formats. On the 32-bit words a table-driven first
+exact value rounded once to storage at every format, gated against 497
+mpmath references at thirteen formats. On the 32-bit words a table-driven first
 stage with a carried error bound decides results away from a rounding
 boundary (13.8 ns per softcap, 29.8 ns per SwiGLU output at Q22.10 on an
 i7-7700, faster than `fused::silu`); the rest go to the crate's exact
