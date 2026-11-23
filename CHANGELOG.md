@@ -5,9 +5,10 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.4] - 2026-11-23
 
-Additive: nothing already shipped changes.
+Additive: nothing already shipped changes; every existing function returns
+what it returned in 0.7.3.
 
 ### Added
 

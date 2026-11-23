@@ -554,6 +554,20 @@ binaries, about 6700 tests) and compares every public operation with the
 published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
 `docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
 
+### v0.7.4: softcap and softcapped SwiGLU, correctly rounded
+
+**Release 2026-11-23.** Additive. `fused::softcap` (`cap * tanh(x / cap)`,
+the logit and activation softcap) and `fused::softcapped_swiglu`
+(`gate_cap * tanh(gate / gate_cap) * sigmoid(gate) * up_cap * tanh(up / up_cap)`,
+interleaved gate/up input, and wide inputs at `2F` fraction bits so a
+projection and its activation round once together). Every result is the
+exact value rounded once to storage at every format, gated against 442
+mpmath references at ten formats. On the 32-bit words a table-driven first
+stage with a carried error bound decides results away from a rounding
+boundary (13.8 ns per softcap, 29.8 ns per SwiGLU output at Q22.10 on an
+i7-7700, faster than `fused::silu`); the rest go to the crate's exact
+two-stage evaluation.
+
 ### v0.7.3: wide division, decimal engine and attention mix, faster with the same results
 
 **Release 2026-11-22.** Speed only. Wide integer division (`I256` to
