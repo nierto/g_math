@@ -381,6 +381,15 @@ Modules: g_math::fixed_point::imperative::fused
 | `sigmoid_mul` | fn | `x * sigmoid(gate)`: the sigmoid at the wide tier, the product exact, one rounding to storage (nearest, ties toward +infinity). |
 | `sigmoid_mul_slice` | fn | [`sigmoid_mul`] element by element: `out[i] = x[i] * sigmoid(gate[i])`. |
 | `sigmoid_mul_in_place` | fn | [`sigmoid_mul`] in place: `x[i] *= sigmoid(gate[i])`. |
+| `softcap` | fn | `cap * tanh(x / cap)` (a logit or activation softcap), the exact value rounded once to storage: nearest, ties toward +infinity. |
+| `softcap_slice` | fn | [`softcap`] element by element. |
+| `softcap_in_place` | fn | [`softcap`] in place. |
+| `softcap_wide_slice` | fn | [`softcap`] of wide inputs: raws at `2F` fraction bits (the compute word, as a wide-output matvec returns them), the result rounded once to storage. |
+| `softcapped_swiglu` | fn | The softcapped SwiGLU of one gate and one up value: `gate_cap * tanh(gate / gate_cap) * sigmoid(gate) * up_cap * tanh(up / up_cap)` (the sigmoid sees the raw gate; the caps bound the linear gate factor and `up`), the exact value rounded once to storage: nearest, ties toward +infinity. |
+| `softcapped_swiglu_interleaved` | fn | [`softcapped_swiglu`] over interleaved pairs, as a fused gate/up projection lays them out: `gate_up[2j]` is gate `j`, `gate_up[2j + 1]` is up `j`; the result has `gate_up.len() / 2` values. |
+| `softcapped_swiglu_interleaved_into` | fn | [`softcapped_swiglu_interleaved`] into a caller buffer of `gate_up.len() / 2` values. |
+| `softcapped_swiglu_interleaved_wide` | fn | [`softcapped_swiglu_interleaved`] of wide inputs: raws at `2F` fraction bits (the compute word, as a wide-output matvec returns them), so the projection and the activation round once together instead of twice. |
+| `softcapped_swiglu_interleaved_wide_into` | fn | [`softcapped_swiglu_interleaved_wide`] into a caller buffer of `gate_up.len() / 2` values. |
 | `entropy` | fn | Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the wide tier and the sum rounded to storage once. |
 | `dot_many` | fn | One query against many keys stored in one contiguous buffer: element `k` of the result is `dot(query, keys_flat[k * dim..(k + 1) * dim])`, each accumulated at the compute tier and rounded to storage once, exactly as [`dot`] and `FixedVector::<Fixed<S, F>>::dot` round. |
 | `dot_many_scaled` | fn | [`dot_many`] with every result then multiplied by `scale`: element `k` is `dot_many(query, keys_flat, dim)[k] * scale`, both roundings kept (the dot rounded to storage, then the product rounded to nearest, ties toward +infinity, as the `*` operator rounds). |

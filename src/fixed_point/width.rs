@@ -279,6 +279,36 @@ pub trait Storage: WideInt {
     {
         None
     }
+    /// Softcap / softcapped SwiGLU through a word-specific first stage (the
+    /// same words as the exact stage); `false` when the word has none.
+    #[doc(hidden)]
+    fn softcap_into_fast<const F: u32>(_x: &[Self], _cap: Self, _out: &mut [Self]) -> bool
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        false
+    }
+    #[doc(hidden)]
+    fn softcap_wide_into_fast<const F: u32>(_x: &[Self::Compute], _cap: Self, _out: &mut [Self]) -> bool
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        false
+    }
+    #[doc(hidden)]
+    fn swiglu_into_fast<const F: u32>(_gate_up: &[Self], _gate_cap: Self, _up_cap: Self, _out: &mut [Self]) -> bool
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        false
+    }
+    #[doc(hidden)]
+    fn swiglu_wide_into_fast<const F: u32>(_gate_up: &[Self::Compute], _gate_cap: Self, _up_cap: Self, _out: &mut [Self]) -> bool
+    where
+        Fixed<Self, F>: FixedNum<Storage = Self>,
+    {
+        false
+    }
     #[doc(hidden)]
     fn entropy_fast<const F: u32>(_weights: &[Self]) -> Option<Result<Self, OverflowDetected>>
     where
@@ -418,6 +448,34 @@ impl Storage for i32 {
     {
         let p = (x as i128) * gate_sigmoid_q64::<F>(gate as i128);
         Some(((p >> 64) + ((p >> 63) & 1)) as i32)
+    }
+    fn softcap_into_fast<const F: u32>(x: &[i32], cap: i32, out: &mut [i32]) -> bool
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        crate::fixed_point::imperative::softcap::softcap_i32_into::<i32, F>(x, F, cap, out);
+        true
+    }
+    fn softcap_wide_into_fast<const F: u32>(x: &[i64], cap: i32, out: &mut [i32]) -> bool
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        crate::fixed_point::imperative::softcap::softcap_i32_into::<i64, F>(x, 2 * F, cap, out);
+        true
+    }
+    fn swiglu_into_fast<const F: u32>(gate_up: &[i32], gate_cap: i32, up_cap: i32, out: &mut [i32]) -> bool
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        crate::fixed_point::imperative::softcap::swiglu_i32_into::<i32, F>(gate_up, F, gate_cap, up_cap, out);
+        true
+    }
+    fn swiglu_wide_into_fast<const F: u32>(gate_up: &[i64], gate_cap: i32, up_cap: i32, out: &mut [i32]) -> bool
+    where
+        Fixed<i32, F>: FixedNum<Storage = i32>,
+    {
+        crate::fixed_point::imperative::softcap::swiglu_i32_into::<i64, F>(gate_up, 2 * F, gate_cap, up_cap, out);
+        true
     }
     fn entropy_fast<const F: u32>(weights: &[i32]) -> Option<Result<i32, OverflowDetected>>
     where

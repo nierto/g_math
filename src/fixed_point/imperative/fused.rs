@@ -749,6 +749,182 @@ where
     }
 }
 
+fn cap_nonzero<S: Storage>(cap: S, what: &str) {
+    assert!(cap != S::ZERO, "{what}: cap is zero");
+}
+
+fn softcap_raw_into<S: Storage, const F: u32>(x: &[S], cap: S, out: &mut [S])
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    cap_nonzero(cap, "softcap");
+    if !S::softcap_into_fast::<F>(x, cap, out) {
+        for (o, &xi) in out.iter_mut().zip(x) {
+            *o = super::softcap::softcap_exact::<S, S, F>(xi, F, cap);
+        }
+    }
+}
+
+/// `cap * tanh(x / cap)` (a logit or activation softcap), the exact value
+/// rounded once to storage: nearest, ties toward +infinity. `cap` and `-cap`
+/// give the same result; `|result| <= |cap|`.
+///
+/// On the 32-bit words a table-driven first stage decides all but a tiny
+/// fraction of inputs (those within its error bound of a rounding boundary)
+/// at a few tens of nanoseconds; the rest, and every input on the wider
+/// words, are settled by the crate's exact two-stage evaluation. Both give
+/// the same word.
+///
+/// # Panics
+/// Panics if `cap` is zero.
+pub fn softcap<S: Storage, const F: u32>(x: Fixed<S, F>, cap: Fixed<S, F>) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = [S::ZERO];
+    softcap_raw_into::<S, F>(&[x.raw()], cap.raw(), &mut out);
+    Fixed::from_raw(out[0])
+}
+
+/// [`softcap`] element by element.
+///
+/// # Panics
+/// Panics if `cap` is zero.
+pub fn softcap_slice<S: Storage, const F: u32>(x: &[Fixed<S, F>], cap: Fixed<S, F>) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = vec![Fixed::from_raw(S::ZERO); x.len()];
+    softcap_raw_into::<S, F>(Fixed::raw_slice(x), cap.raw(), Fixed::raw_slice_mut(&mut out));
+    out
+}
+
+/// [`softcap`] in place.
+///
+/// # Panics
+/// Panics if `cap` is zero.
+pub fn softcap_in_place<S: Storage, const F: u32>(x: &mut [Fixed<S, F>], cap: Fixed<S, F>)
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let input: Vec<S> = Fixed::raw_slice(x).to_vec();
+    softcap_raw_into::<S, F>(&input, cap.raw(), Fixed::raw_slice_mut(x));
+}
+
+/// [`softcap`] of wide inputs: raws at `2F` fraction bits (the compute
+/// word, as a wide-output matvec returns them), the result rounded once to
+/// storage. Skips the rounding of the inputs to storage.
+///
+/// # Panics
+/// Panics if `cap` is zero.
+pub fn softcap_wide_slice<S: Storage, const F: u32>(x: &[Compute<Fixed<S, F>>], cap: Fixed<S, F>) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    cap_nonzero(cap.raw(), "softcap");
+    let mut out = vec![S::ZERO; x.len()];
+    if !S::softcap_wide_into_fast::<F>(x, cap.raw(), &mut out) {
+        for (o, &xi) in out.iter_mut().zip(x) {
+            *o = super::softcap::softcap_exact::<S, S::Compute, F>(xi, 2 * F, cap.raw());
+        }
+    }
+    out.into_iter().map(Fixed::from_raw).collect()
+}
+
+/// The softcapped SwiGLU of one gate and one up value:
+/// `gate_cap * tanh(gate / gate_cap) * sigmoid(gate) * up_cap * tanh(up / up_cap)`
+/// (the sigmoid sees the raw gate; the caps bound the linear gate factor and
+/// `up`), the exact value rounded once to storage: nearest, ties toward
+/// +infinity. First stage and exact stage as in [`softcap`].
+///
+/// # Panics
+/// Panics if a cap is zero or the result exceeds the storage range (it is
+/// bounded by `|gate_cap * up_cap|`).
+pub fn softcapped_swiglu<S: Storage, const F: u32>(gate: Fixed<S, F>, up: Fixed<S, F>, gate_cap: Fixed<S, F>, up_cap: Fixed<S, F>) -> Fixed<S, F>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = [Fixed::from_raw(S::ZERO)];
+    softcapped_swiglu_interleaved_into(&[gate, up], gate_cap, up_cap, &mut out);
+    out[0]
+}
+
+/// [`softcapped_swiglu`] over interleaved pairs, as a fused gate/up
+/// projection lays them out: `gate_up[2j]` is gate `j`, `gate_up[2j + 1]` is
+/// up `j`; the result has `gate_up.len() / 2` values.
+///
+/// # Panics
+/// Panics if `gate_up.len()` is odd, a cap is zero or a result exceeds the
+/// storage range.
+pub fn softcapped_swiglu_interleaved<S: Storage, const F: u32>(gate_up: &[Fixed<S, F>], gate_cap: Fixed<S, F>, up_cap: Fixed<S, F>) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = vec![Fixed::from_raw(S::ZERO); gate_up.len() / 2];
+    softcapped_swiglu_interleaved_into(gate_up, gate_cap, up_cap, &mut out);
+    out
+}
+
+/// [`softcapped_swiglu_interleaved`] into a caller buffer of
+/// `gate_up.len() / 2` values.
+///
+/// # Panics
+/// As [`softcapped_swiglu_interleaved`], and if `out` has the wrong length.
+pub fn softcapped_swiglu_interleaved_into<S: Storage, const F: u32>(gate_up: &[Fixed<S, F>], gate_cap: Fixed<S, F>, up_cap: Fixed<S, F>, out: &mut [Fixed<S, F>])
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    assert!(gate_up.len() % 2 == 0, "softcapped_swiglu: odd number of interleaved values");
+    assert_eq!(out.len(), gate_up.len() / 2, "softcapped_swiglu: output length");
+    let (gc, uc) = (gate_cap.raw(), up_cap.raw());
+    cap_nonzero(gc, "softcapped_swiglu");
+    cap_nonzero(uc, "softcapped_swiglu");
+    let raw = Fixed::raw_slice(gate_up);
+    let o = Fixed::raw_slice_mut(out);
+    if !S::swiglu_into_fast::<F>(raw, gc, uc, o) {
+        for (oj, p) in o.iter_mut().zip(raw.chunks_exact(2)) {
+            *oj = super::softcap::swiglu_exact::<S, S, F>(p[0], p[1], F, gc, uc);
+        }
+    }
+}
+
+/// [`softcapped_swiglu_interleaved`] of wide inputs: raws at `2F` fraction
+/// bits (the compute word, as a wide-output matvec returns them), so the
+/// projection and the activation round once together instead of twice.
+///
+/// # Panics
+/// As [`softcapped_swiglu_interleaved`].
+pub fn softcapped_swiglu_interleaved_wide<S: Storage, const F: u32>(gate_up: &[Compute<Fixed<S, F>>], gate_cap: Fixed<S, F>, up_cap: Fixed<S, F>) -> Vec<Fixed<S, F>>
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    let mut out = vec![Fixed::from_raw(S::ZERO); gate_up.len() / 2];
+    softcapped_swiglu_interleaved_wide_into(gate_up, gate_cap, up_cap, &mut out);
+    out
+}
+
+/// [`softcapped_swiglu_interleaved_wide`] into a caller buffer of
+/// `gate_up.len() / 2` values.
+///
+/// # Panics
+/// As [`softcapped_swiglu_interleaved`], and if `out` has the wrong length.
+pub fn softcapped_swiglu_interleaved_wide_into<S: Storage, const F: u32>(gate_up: &[Compute<Fixed<S, F>>], gate_cap: Fixed<S, F>, up_cap: Fixed<S, F>, out: &mut [Fixed<S, F>])
+where
+    Fixed<S, F>: FixedNum<Storage = S>,
+{
+    assert!(gate_up.len() % 2 == 0, "softcapped_swiglu: odd number of interleaved values");
+    assert_eq!(out.len(), gate_up.len() / 2, "softcapped_swiglu: output length");
+    let (gc, uc) = (gate_cap.raw(), up_cap.raw());
+    cap_nonzero(gc, "softcapped_swiglu");
+    cap_nonzero(uc, "softcapped_swiglu");
+    let o = Fixed::raw_slice_mut(out);
+    if !S::swiglu_wide_into_fast::<F>(gate_up, gc, uc, o) {
+        for (oj, p) in o.iter_mut().zip(gate_up.chunks_exact(2)) {
+            *oj = super::softcap::swiglu_exact::<S, S::Compute, F>(p[0], p[1], 2 * F, gc, uc);
+        }
+    }
+}
+
 /// Shannon entropy `-sum(w * ln(w))` in nats, the terms accumulated at the
 /// wide tier and the sum rounded to storage once. A zero weight contributes
 /// zero. The weights are used as given: they are not normalised.

@@ -5,6 +5,44 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Additive: nothing already shipped changes.
+
+### Added
+
+- **`fused::softcap`** (`softcap_slice`, `softcap_in_place`,
+  `softcap_wide_slice`): `cap * tanh(x / cap)`, the logit and activation
+  softcap, and **`fused::softcapped_swiglu`**
+  (`softcapped_swiglu_interleaved`, `_into`, `_wide`, `_wide_into`):
+  `gate_cap * tanh(gate / gate_cap) * sigmoid(gate) * up_cap * tanh(up / up_cap)`,
+  the interleaved forms reading a fused gate/up projection's output
+  (`gate_up[2j]`, `gate_up[2j + 1]`), the wide forms its raws at `2F`
+  fraction bits so the projection and the activation round once together.
+  Every result is the exact value rounded once to storage (nearest, ties
+  toward +infinity), at every format. On the 32-bit words a table-driven
+  first stage (`exp(-a)` from a 5760-entry table at 62 fraction bits and a
+  degree-6 polynomial, one table-and-Newton reciprocal instead of a
+  division, four elements interleaved, an error bound carried to the end)
+  answers when its bound keeps the result off a rounding boundary; the
+  rest, and the wider words, go to the crate's exact two-stage evaluation.
+  Both return the same word. Q22.10 on an i7-7700: 13.8 ns per softcapped
+  value, 29.8 ns per SwiGLU output (`fused::silu` 32.6 ns,
+  `sigmoid_mul` 53.5 ns, neither correctly rounded).
+
+### Validation
+
+- `tests/softcap_validation.rs`: 442 mpmath references (150 digits;
+  `scripts/generate_softcap_refs.py`) at every format and split, every form,
+  equal to the correctly rounded value. Unit tests in
+  `imperative/softcap.rs`: the table within half a unit at 2^-62 of every
+  entry, `exp(-a)` within its budget, and the first stage equal to the exact
+  stage on every input up to saturation at Q22.10 (four caps) and Q16.16
+  (97 million inputs), on 1.3 million random SwiGLU and wide inputs, and
+  with every element forced through the exact stage; the reciprocal within
+  4 units of exact division on 2 million divisors; the interleaved lanes
+  equal to the single-element form.
+
 ## [0.7.3] - 2026-11-22
 
 Speed only: every function returns the same integers as 0.7.2, value for

@@ -45,6 +45,8 @@ mod trace_sqrt;
 mod trace_sqrt4;
 #[path = "transcendental_ulp_validation.rs"]
 mod transcendental_ulp_validation;
+#[path = "softcap_validation.rs"]
+mod softcap_validation;
 #[path = "try_direct_bypass_validation.rs"]
 mod try_direct_bypass_validation;
 #[path = "validation_benchmark.rs"]
