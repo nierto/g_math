@@ -554,6 +554,15 @@ binaries, about 6700 tests) and compares every public operation with the
 published 0.6.7 at six builds. Design: `docs/design/WIDTH_AS_TYPE.md`,
 `docs/design/CORRECT_ROUNDING.md`; migration: `docs/UPGRADING_0.7.md`.
 
+### v0.7.6: exact Walsh-Hadamard transform
+
+**Release 2026-11-26.** Additive. `imperative::hadamard::walsh_hadamard_in_place`
+and `walsh_hadamard_blocks_in_place`: `H x` on any integer word, exact, in
+place (the normalisation left to the caller's one rounding; an exact shift
+for powers of four). Overflow is `TierOverflow` with the input unchanged.
+Gated against the matrix definition and mpmath. The sink-logit softmax is
+`softmax_mix` with a zero value row, now gated against mpmath.
+
 ### v0.7.5: wide sigmoid gate and softcap top-k
 
 **Release 2026-11-24.** Additive. `fused::sigmoid_mul_wide_slice`:

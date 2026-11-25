@@ -43,6 +43,11 @@ let det = lu.determinant();
   holds only `2F` bits), one rounding per output entry. Against mpmath they are
   correctly rounded at every format and at the 32-bit splits from 8 to 24 fraction bits,
   including norms up to 7 and SPD spectra from 1/8 to 60.
+- **Walsh-Hadamard transform** (`hadamard`, 0.7.6): `walsh_hadamard_in_place`
+  and the block-diagonal `walsh_hadamard_blocks_in_place` on any integer word,
+  exact (additions and subtractions only); the `1 / sqrt(n)` normalisation is
+  left to the caller's rounding (an exact shift for powers of four). A result
+  past the word is `TierOverflow`, the input unchanged.
 
 ## Public API
 

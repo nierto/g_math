@@ -27,6 +27,8 @@ mod eigen_svd_schur_validation;
 mod exact_predicates_validation;
 #[path = "fused_ops_validation.rs"]
 mod fused_ops_validation;
+#[path = "hadamard_validation.rs"]
+mod hadamard_validation;
 #[path = "interval_enclosure.rs"]
 mod interval_enclosure;
 #[path = "l1c_l1d_l3a_validation.rs"]

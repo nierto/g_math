@@ -493,7 +493,7 @@ The outcome of a certified positive-definiteness test.
 
 ## Linear algebra
 
-Modules: g_math::fixed_point::imperative::decompose, g_math::fixed_point::imperative::derived, g_math::fixed_point::imperative::matrix_functions
+Modules: g_math::fixed_point::imperative::decompose, g_math::fixed_point::imperative::derived, g_math::fixed_point::imperative::matrix_functions, g_math::fixed_point::imperative::hadamard
 
 | Item | Kind | Summary |
 | --- | --- | --- |
@@ -526,6 +526,8 @@ Modules: g_math::fixed_point::imperative::decompose, g_math::fixed_point::impera
 | `matrix_sqrt` | fn | Principal matrix square root by the Denman-Beavers iteration on the working matrix of the format, rounded once. |
 | `matrix_log` | fn | Principal matrix logarithm by inverse scaling and squaring on the working matrix of the format, rounded once. |
 | `matrix_pow` | fn | `A^p = exp(p log A)`; `p` of 0, 1 and -1 are the identity, `A` and the inverse without the logarithm. |
+| `walsh_hadamard_in_place` | fn | The Walsh-Hadamard transform of `x` in place, exact. |
+| `walsh_hadamard_blocks_in_place` | fn | [`walsh_hadamard_in_place`] on each consecutive block of `block` words (a block-diagonal transform). |
 
 ### LUDecomposition
 

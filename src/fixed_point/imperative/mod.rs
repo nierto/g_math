@@ -24,6 +24,7 @@ pub mod projective;
 pub mod fiber_bundle;
 pub mod interval;
 pub mod predicates;
+pub mod hadamard;
 pub(crate) mod kernels;
 pub(crate) mod softcap;
 pub(crate) mod decimal_literal;

@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "g_math"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "num-bigint",
  "num-integer",
@@ -80,7 +80,7 @@ version = "0.0.0"
 dependencies = [
  "g_math 0.6.7",
  "g_math 0.7.2",
- "g_math 0.7.5",
+ "g_math 0.7.6",
 ]
 
 [[package]]

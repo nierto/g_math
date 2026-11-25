@@ -77,6 +77,7 @@ const SURFACE: &[(&str, &str, &str, Option<&str>)] = &[
     ("src/fixed_point/imperative/decompose.rs", "g_math::fixed_point::imperative::decompose", "linalg", None),
     ("src/fixed_point/imperative/derived.rs", "g_math::fixed_point::imperative::derived", "linalg", None),
     ("src/fixed_point/imperative/matrix_functions.rs", "g_math::fixed_point::imperative::matrix_functions", "linalg", None),
+    ("src/fixed_point/imperative/hadamard.rs", "g_math::fixed_point::imperative::hadamard", "linalg", None),
     ("src/fixed_point/imperative/manifold.rs", "g_math::fixed_point::imperative::manifold", "geometry", None),
     ("src/fixed_point/imperative/lie_group.rs", "g_math::fixed_point::imperative::lie_group", "geometry", None),
     ("src/fixed_point/imperative/curvature.rs", "g_math::fixed_point::imperative::curvature", "geometry", None),

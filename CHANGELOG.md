@@ -5,6 +5,36 @@ All notable changes to gMath will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-11-26
+
+Additive: nothing already shipped changes; every existing function returns
+what it returned in 0.7.5.
+
+### Added
+
+- **`imperative::hadamard::walsh_hadamard_in_place`** and
+  **`walsh_hadamard_blocks_in_place`**: the Walsh-Hadamard transform
+  `H x`, `H[r][c] = (-1)^popcount(r & c)`, in place on any integer word
+  (`i32`, `i64`, `i128`, `I256` and wider), exact: `log2(n)` butterfly
+  passes of additions and subtractions, no rounding. The block form applies
+  it to each consecutive block (a block-diagonal transform, the input
+  rotation of Hadamard-rotated checkpoints). A normalised transform
+  `H / sqrt(n)` is this one and the caller's division, an exact shift by
+  `log2(n) / 2` when `n` is a power of four, which a caller folds into its
+  one rounding. A result that does not fit the word is `TierOverflow` and
+  leaves the input unchanged; below `2^(BITS - 1 - log2(n))` no check runs.
+
+### Validation
+
+- `tests/hadamard_validation.rs`: lengths 1 to 1024, the i32 word at and
+  past its limits, i64, I256, against the matrix definition (integers,
+  confirmed by mpmath; for `n = 4^j` the normalised floor checked against a
+  real square root). Unit tests: the matrix definition at 256 bits, the
+  checked path and its refusals, `H H = n I`, blocks independent.
+- `tests/fused_ops_validation.rs`: attention with a sink logit as
+  `softmax_mix` with the sink's logit and a zero value row, against mpmath
+  at every format.
+
 ## [0.7.5] - 2026-11-24
 
 Additive: nothing already shipped changes; every existing function returns

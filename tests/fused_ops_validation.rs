@@ -373,6 +373,20 @@ macro_rules! suite {
             }
 
             #[test]
+            fn test_softmax_mix_sink_logit_is_a_zero_value_row() {
+                // attention with a sink: one more logit in the denominator and no value row,
+                // computed as softmax_mix with the sink's logit and a zero value row
+                let scores = [fp("0"), fp("0.5"), fp("1"), fp("1.5"), fp("0.75")];
+                let mut rows = mix_rows();
+                rows.push(vec![fp("0"); 3]);
+                let out = fused::softmax_mix_values(&scores, &as_refs(&rows)).unwrap();
+                // mpmath 60-digit: sum_j e^(s_j) V[j] / (e^0.75 + sum_j e^(s_j))
+                assert_fp(out[0], fp("0.31924649144364628154696983481229481452927221435781"), tight(), "mix_sink[0]");
+                assert_fp(out[1], fp("0.88891928609548947457491242294753273043875291594488"), tight(), "mix_sink[1]");
+                assert_fp(out[2], fp("-0.22648044982305598917489258986896761307945902214506"), tight(), "mix_sink[2]");
+            }
+
+            #[test]
             fn test_softmax_mix_uniform_recovers_exact_mean() {
                 // Uniform scores ⇒ softmax is exactly uniform (1/n each) regardless of the
                 // transcendental exp value, so the mix is the EXACT arithmetic mean of the
